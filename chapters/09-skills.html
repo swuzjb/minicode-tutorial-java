@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>09 - 可扩展行为系统 | MiniCode (Java) 教程</title>
+  <link rel="stylesheet" href="../styles/main.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    <nav class="sidebar">
+      <a href="../index.html" class="sidebar-logo">
+        <span class="logo-mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/></svg></span>
+        MiniCode (Java)
+      </a>
+      <ul class="sidebar-nav">
+        <li><a href="01-hello-claude.html"><span class="chapter-num">01</span> Hello, Claude</a></li>
+        <li><a href="02-streaming-repl.html"><span class="chapter-num">02</span> 流式对话</a></li>
+        <li><a href="03-first-tool.html"><span class="chapter-num">03</span> 第一个工具</a></li>
+        <li><a href="04-tool-registry.html"><span class="chapter-num">04</span> 工具注册表</a></li>
+        <li><a href="05-security.html"><span class="chapter-num">05</span> 安全防护</a></li>
+        <li><a href="06-mcp.html"><span class="chapter-num">06</span> MCP 插件</a></li>
+        <li><a href="07-context.html"><span class="chapter-num">07</span> Context 管理</a></li>
+        <li><a href="08-ship-it.html"><span class="chapter-num">08</span> 打包发布</a></li>
+        <li><a href="09-skills.html" class="active"><span class="chapter-num">09</span> 可扩展行为</a></li>
+      </ul>
+    </nav>
+
+    <main class="main-content">
+      <header class="chapter-header">
+        <span class="chapter-number">Chapter 09</span>
+        <h1 class="chapter-title">可扩展行为系统</h1>
+        <p class="chapter-subtitle">MCP 让别人加工具。但有时候不是想加「能做什么」，而是想改变「怎么做」—— 比如让它先写测试，或者遇到 bug 用系统化调试。</p>
+      </header>
+
+      <p>到目前为止，MiniCode 的行为是固定的：系统提示词写死在代码里，用户只能通过对话来引导 AI。这一章我们让行为本身变成可插拔的——Slash Commands 提供本地快捷操作，Skills 注入行为指令，Custom Instructions 持久化用户偏好。</p>
+
+      <!-- ============================== Part 1 ============================== -->
+
+      <h2>Part 1：Slash Commands</h2>
+
+      <p>Slash Commands 是用户在 REPL 中直接执行的本地命令，不经过 AI。类似 Claude Code 中的 <code>/help</code>、<code>/clear</code>、<code>/compact</code>。</p>
+
+      <h3>SlashCommand 接口</h3>
+
+      <p>先定义抽象：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public interface</span> <span class="token-type">SlashCommand</span> <span class="token-punctuation">{</span>
+    <span class="token-type">String</span> <span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-type">String</span> <span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">void</span> <span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">,</span> <span class="token-type">AgentContext</span> <span class="token-variable">context</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>三个方法，没有多余的东西。<code>AgentContext</code> 包含当前会话的所有状态——对话历史、活跃的 Skills、SkillLoader 引用等。</p>
+
+      <h3>CommandRegistry</h3>
+
+      <p>和 ToolRegistry 思路一致——注册 + 分发：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public class</span> <span class="token-type">CommandRegistry</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">private final</span> <span class="token-type">Map</span><span class="token-operator">&lt;</span><span class="token-type">String</span><span class="token-punctuation">,</span> <span class="token-type">SlashCommand</span><span class="token-operator">&gt;</span> <span class="token-variable">commands</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">LinkedHashMap</span><span class="token-operator">&lt;&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">public void</span> <span class="token-function">register</span><span class="token-punctuation">(</span><span class="token-type">SlashCommand</span> <span class="token-variable">cmd</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">commands</span><span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-variable">cmd</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span> <span class="token-variable">cmd</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public boolean</span> <span class="token-function">isCommand</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">input</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">return</span> <span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">startsWith</span><span class="token-punctuation">(</span><span class="token-string">"/"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public boolean</span> <span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">input</span><span class="token-punctuation">,</span> <span class="token-type">AgentContext</span> <span class="token-variable">context</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">parts</span> <span class="token-operator">=</span> <span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">substring</span><span class="token-punctuation">(</span><span class="token-number">1</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">split</span><span class="token-punctuation">(</span><span class="token-string">"\\s+"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">name</span> <span class="token-operator">=</span> <span class="token-variable">parts</span><span class="token-punctuation">[</span><span class="token-number">0</span><span class="token-punctuation">]</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">args</span> <span class="token-operator">=</span> <span class="token-type">Arrays</span><span class="token-punctuation">.</span><span class="token-function">copyOfRange</span><span class="token-punctuation">(</span><span class="token-variable">parts</span><span class="token-punctuation">,</span> <span class="token-number">1</span><span class="token-punctuation">,</span> <span class="token-variable">parts</span><span class="token-punctuation">.</span><span class="token-variable">length</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">cmd</span> <span class="token-operator">=</span> <span class="token-variable">commands</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">cmd</span> <span class="token-operator">==</span> <span class="token-keyword">null</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"Unknown command: /"</span> <span class="token-operator">+</span> <span class="token-variable">name</span> <span class="token-operator">+</span> <span class="token-string">". Type /help for list."</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">return false</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+        <span class="token-variable">cmd</span><span class="token-punctuation">.</span><span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-variable">args</span><span class="token-punctuation">,</span> <span class="token-variable">context</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">return true</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h3>内置命令</h3>
+
+      <p>注册几个常用命令：<code>/help</code>、<code>/clear</code>、<code>/compact</code>、<code>/model</code>、<code>/skill</code>：</p>
+
+      <pre data-lang="java"><code><span class="token-comment">// 初始化时注册</span>
+<span class="token-keyword">var</span> <span class="token-variable">cmdRegistry</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">CommandRegistry</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+<span class="token-variable">cmdRegistry</span><span class="token-punctuation">.</span><span class="token-function">register</span><span class="token-punctuation">(</span><span class="token-keyword">new</span> <span class="token-type">SlashCommand</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"help"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"Show available commands"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">public void</span> <span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">,</span> <span class="token-type">AgentContext</span> <span class="token-variable">ctx</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">cmdRegistry</span><span class="token-punctuation">.</span><span class="token-function">getAll</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">forEach</span><span class="token-punctuation">(</span><span class="token-punctuation">(</span><span class="token-variable">n</span><span class="token-punctuation">,</span> <span class="token-variable">c</span><span class="token-punctuation">)</span> <span class="token-operator">-&gt;</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">printf</span><span class="token-punctuation">(</span><span class="token-string">"  /%s - %s%n"</span><span class="token-punctuation">,</span> <span class="token-variable">n</span><span class="token-punctuation">,</span> <span class="token-variable">c</span><span class="token-punctuation">.</span><span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+<span class="token-variable">cmdRegistry</span><span class="token-punctuation">.</span><span class="token-function">register</span><span class="token-punctuation">(</span><span class="token-keyword">new</span> <span class="token-type">SlashCommand</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"clear"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"Clear conversation history"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">public void</span> <span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">,</span> <span class="token-type">AgentContext</span> <span class="token-variable">ctx</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">clear</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"Conversation cleared."</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+<span class="token-variable">cmdRegistry</span><span class="token-punctuation">.</span><span class="token-function">register</span><span class="token-punctuation">(</span><span class="token-keyword">new</span> <span class="token-type">SlashCommand</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"compact"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"Compress conversation context"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">public void</span> <span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">,</span> <span class="token-type">AgentContext</span> <span class="token-variable">ctx</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">contextManager</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">compact</span><span class="token-punctuation">(</span><span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"Context compacted."</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+<span class="token-variable">cmdRegistry</span><span class="token-punctuation">.</span><span class="token-function">register</span><span class="token-punctuation">(</span><span class="token-keyword">new</span> <span class="token-type">SlashCommand</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"model"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"Switch model (e.g. /model sonnet)"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">public void</span> <span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">,</span> <span class="token-type">AgentContext</span> <span class="token-variable">ctx</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">args</span><span class="token-punctuation">.</span><span class="token-variable">length</span> <span class="token-operator">==</span> <span class="token-number">0</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"Current: "</span> <span class="token-operator">+</span> <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">model</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span> <span class="token-keyword">else</span> <span class="token-punctuation">{</span>
+            <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">setModel</span><span class="token-punctuation">(</span><span class="token-variable">args</span><span class="token-punctuation">[</span><span class="token-number">0</span><span class="token-punctuation">]</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"Switched to: "</span> <span class="token-operator">+</span> <span class="token-variable">args</span><span class="token-punctuation">[</span><span class="token-number">0</span><span class="token-punctuation">]</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span></code></pre>
+
+      <h3>接入 REPL 循环</h3>
+
+      <p>在主循环里加一个判断——如果输入以 <code>/</code> 开头就走命令分发，不发给 AI：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">while</span> <span class="token-punctuation">(</span><span class="token-keyword">true</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-string">"\n&gt; "</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">var</span> <span class="token-variable">input</span> <span class="token-operator">=</span> <span class="token-variable">scanner</span><span class="token-punctuation">.</span><span class="token-function">nextLine</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">trim</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">isEmpty</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">continue</span><span class="token-punctuation">;</span>
+
+    <span class="token-comment">// Slash Command 拦截</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">cmdRegistry</span><span class="token-punctuation">.</span><span class="token-function">isCommand</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">cmdRegistry</span><span class="token-punctuation">.</span><span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">,</span> <span class="token-variable">agentContext</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">continue</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-comment">// 正常发给 AI...</span>
+    <span class="token-function">sendToAI</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">,</span> <span class="token-variable">agentContext</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">&gt; </span><span class="command">/help</span><br>
+          <span class="output">  /help    - Show available commands</span><br>
+          <span class="output">  /clear   - Clear conversation history</span><br>
+          <span class="output">  /compact - Compress conversation context</span><br>
+          <span class="output">  /model   - Switch model (e.g. /model sonnet)</span><br>
+          <span class="output">  /skill   - Manage skills: list / load &lt;name&gt; / unload &lt;name&gt;</span><br>
+          <br>
+          <span class="prompt">&gt; </span><span class="command">/model</span><br>
+          <span class="output">  Current: claude-sonnet-4-20250514</span><br>
+          <br>
+          <span class="prompt">&gt; </span><span class="command">/clear</span><br>
+          <span class="output">  Conversation cleared.</span>
+        </div>
+      </div>
+
+      <!-- ============================== Part 2 ============================== -->
+
+      <h2>Part 2：Skill 加载系统</h2>
+
+      <p>Slash Commands 是本地操作。Skill 不同——它改变 AI 的行为方式。一个 Skill 本质上是一段 Markdown 指令，被注入到 System Prompt 中，让 AI 在接下来的对话中遵循特定工作流。</p>
+
+      <p>比如加载一个 "tdd" Skill，AI 就会先写测试再实现；加载 "debugging" Skill，AI 会按系统化步骤排查问题。</p>
+
+      <h3>Skill 数据模型</h3>
+
+      <pre data-lang="java"><code><span class="token-keyword">public record</span> <span class="token-type">Skill</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-type">String</span> <span class="token-variable">content</span><span class="token-punctuation">,</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">String</span><span class="token-operator">&gt;</span> <span class="token-variable">triggers</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">public</span> <span class="token-type">Skill</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-type">String</span> <span class="token-variable">content</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">this</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-variable">content</span><span class="token-punctuation">,</span> <span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>用 Record 来表示——不可变，语义清晰。<code>triggers</code> 是可选的关键词列表，用于后面的自动建议功能。</p>
+
+      <h3>SkillLoader</h3>
+
+      <p>从文件系统发现和加载 Skill。约定目录结构：<code>.minicode/skills/</code> 目录下，每个 <code>.md</code> 文件就是一个 Skill：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public class</span> <span class="token-type">SkillLoader</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">private final</span> <span class="token-type">Path</span> <span class="token-variable">skillsDir</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">private final</span> <span class="token-type">Map</span><span class="token-operator">&lt;</span><span class="token-type">String</span><span class="token-punctuation">,</span> <span class="token-type">Skill</span><span class="token-operator">&gt;</span> <span class="token-variable">cache</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">HashMap</span><span class="token-operator">&lt;&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">public</span> <span class="token-type">SkillLoader</span><span class="token-punctuation">(</span><span class="token-type">Path</span> <span class="token-variable">skillsDir</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">this</span><span class="token-punctuation">.</span><span class="token-variable">skillsDir</span> <span class="token-operator">=</span> <span class="token-variable">skillsDir</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">String</span><span class="token-operator">&gt;</span> <span class="token-function">discover</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-keyword">throws</span> <span class="token-type">IOException</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-operator">!</span><span class="token-type">Files</span><span class="token-punctuation">.</span><span class="token-function">exists</span><span class="token-punctuation">(</span><span class="token-variable">skillsDir</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">try</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">stream</span> <span class="token-operator">=</span> <span class="token-type">Files</span><span class="token-punctuation">.</span><span class="token-function">list</span><span class="token-punctuation">(</span><span class="token-variable">skillsDir</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">return</span> <span class="token-variable">stream</span>
+                <span class="token-punctuation">.</span><span class="token-function">filter</span><span class="token-punctuation">(</span><span class="token-variable">p</span> <span class="token-operator">-&gt;</span> <span class="token-variable">p</span><span class="token-punctuation">.</span><span class="token-function">toString</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">endsWith</span><span class="token-punctuation">(</span><span class="token-string">".md"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">map</span><span class="token-punctuation">(</span><span class="token-variable">p</span> <span class="token-operator">-&gt;</span> <span class="token-variable">p</span><span class="token-punctuation">.</span><span class="token-function">getFileName</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">toString</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">replace</span><span class="token-punctuation">(</span><span class="token-string">".md"</span><span class="token-punctuation">,</span> <span class="token-string">""</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">toList</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public</span> <span class="token-type">Skill</span> <span class="token-function">load</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">name</span><span class="token-punctuation">)</span> <span class="token-keyword">throws</span> <span class="token-type">IOException</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">cache</span><span class="token-punctuation">.</span><span class="token-function">containsKey</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-variable">cache</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">path</span> <span class="token-operator">=</span> <span class="token-variable">skillsDir</span><span class="token-punctuation">.</span><span class="token-function">resolve</span><span class="token-punctuation">(</span><span class="token-variable">name</span> <span class="token-operator">+</span> <span class="token-string">".md"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">content</span> <span class="token-operator">=</span> <span class="token-type">Files</span><span class="token-punctuation">.</span><span class="token-function">readString</span><span class="token-punctuation">(</span><span class="token-variable">path</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">skill</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">Skill</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-variable">content</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">cache</span><span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-variable">skill</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">return</span> <span class="token-variable">skill</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h3>注入 System Prompt</h3>
+
+      <p>Skill 的核心机制：将加载的 Skill 内容拼接到 System Prompt 中。AI 只看到 System Prompt，它不知道这些指令来自 Skill 文件：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">buildSystemPrompt</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">base</span><span class="token-punctuation">,</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">Skill</span><span class="token-operator">&gt;</span> <span class="token-variable">activeSkills</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">activeSkills</span><span class="token-punctuation">.</span><span class="token-function">isEmpty</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-variable">base</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">var</span> <span class="token-variable">sb</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">StringBuilder</span><span class="token-punctuation">(</span><span class="token-variable">base</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-variable">sb</span><span class="token-punctuation">.</span><span class="token-function">append</span><span class="token-punctuation">(</span><span class="token-string">"\n\n## Active Skills\n\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">skill</span> <span class="token-operator">:</span> <span class="token-variable">activeSkills</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">sb</span><span class="token-punctuation">.</span><span class="token-function">append</span><span class="token-punctuation">(</span><span class="token-string">"&lt;skill name=\""</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">append</span><span class="token-punctuation">(</span><span class="token-variable">skill</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">append</span><span class="token-punctuation">(</span><span class="token-string">"\"&gt;\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">sb</span><span class="token-punctuation">.</span><span class="token-function">append</span><span class="token-punctuation">(</span><span class="token-variable">skill</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">sb</span><span class="token-punctuation">.</span><span class="token-function">append</span><span class="token-punctuation">(</span><span class="token-string">"\n&lt;/skill&gt;\n\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">return</span> <span class="token-variable">sb</span><span class="token-punctuation">.</span><span class="token-function">toString</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h3>/skill 命令实现</h3>
+
+      <p>将 Skill 管理暴露为 Slash Command：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public class</span> <span class="token-type">SkillCommand</span> <span class="token-keyword">implements</span> <span class="token-type">SlashCommand</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"skill"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"Manage skills: list / load &lt;name&gt; / unload &lt;name&gt;"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public void</span> <span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">,</span> <span class="token-type">AgentContext</span> <span class="token-variable">ctx</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">args</span><span class="token-punctuation">.</span><span class="token-variable">length</span> <span class="token-operator">==</span> <span class="token-number">0</span> <span class="token-operator">||</span> <span class="token-variable">args</span><span class="token-punctuation">[</span><span class="token-number">0</span><span class="token-punctuation">]</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"list"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">try</span> <span class="token-punctuation">{</span>
+                <span class="token-keyword">var</span> <span class="token-variable">available</span> <span class="token-operator">=</span> <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">skillLoader</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">discover</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                <span class="token-keyword">var</span> <span class="token-variable">activeNames</span> <span class="token-operator">=</span> <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">activeSkills</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">stream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">map</span><span class="token-punctuation">(</span><span class="token-type">Skill</span><span class="token-operator">::</span><span class="token-variable">name</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">toList</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">name</span> <span class="token-operator">:</span> <span class="token-variable">available</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                    <span class="token-keyword">var</span> <span class="token-variable">marker</span> <span class="token-operator">=</span> <span class="token-variable">activeNames</span><span class="token-punctuation">.</span><span class="token-function">contains</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">)</span> <span class="token-operator">?</span> <span class="token-string">"●"</span> <span class="token-operator">:</span> <span class="token-string">"○"</span><span class="token-punctuation">;</span>
+                    <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"  "</span> <span class="token-operator">+</span> <span class="token-variable">marker</span> <span class="token-operator">+</span> <span class="token-string">" "</span> <span class="token-operator">+</span> <span class="token-variable">name</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                <span class="token-punctuation">}</span>
+            <span class="token-punctuation">}</span> <span class="token-keyword">catch</span> <span class="token-punctuation">(</span><span class="token-type">IOException</span> <span class="token-variable">e</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"Error listing skills: "</span> <span class="token-operator">+</span> <span class="token-variable">e</span><span class="token-punctuation">.</span><span class="token-function">getMessage</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span>
+        <span class="token-punctuation">}</span> <span class="token-keyword">else if</span> <span class="token-punctuation">(</span><span class="token-variable">args</span><span class="token-punctuation">[</span><span class="token-number">0</span><span class="token-punctuation">]</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"load"</span><span class="token-punctuation">)</span> <span class="token-operator">&amp;&amp;</span> <span class="token-variable">args</span><span class="token-punctuation">.</span><span class="token-variable">length</span> <span class="token-operator">&gt;</span> <span class="token-number">1</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">try</span> <span class="token-punctuation">{</span>
+                <span class="token-keyword">var</span> <span class="token-variable">skill</span> <span class="token-operator">=</span> <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">skillLoader</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">load</span><span class="token-punctuation">(</span><span class="token-variable">args</span><span class="token-punctuation">[</span><span class="token-number">1</span><span class="token-punctuation">]</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">activeSkills</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">skill</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"Loaded skill: "</span> <span class="token-operator">+</span> <span class="token-variable">skill</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span> <span class="token-keyword">catch</span> <span class="token-punctuation">(</span><span class="token-type">IOException</span> <span class="token-variable">e</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"Error: skill not found - "</span> <span class="token-operator">+</span> <span class="token-variable">args</span><span class="token-punctuation">[</span><span class="token-number">1</span><span class="token-punctuation">]</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span>
+        <span class="token-punctuation">}</span> <span class="token-keyword">else if</span> <span class="token-punctuation">(</span><span class="token-variable">args</span><span class="token-punctuation">[</span><span class="token-number">0</span><span class="token-punctuation">]</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"unload"</span><span class="token-punctuation">)</span> <span class="token-operator">&amp;&amp;</span> <span class="token-variable">args</span><span class="token-punctuation">.</span><span class="token-variable">length</span> <span class="token-operator">&gt;</span> <span class="token-number">1</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">activeSkills</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">removeIf</span><span class="token-punctuation">(</span><span class="token-variable">s</span> <span class="token-operator">-&gt;</span> <span class="token-variable">s</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-variable">args</span><span class="token-punctuation">[</span><span class="token-number">1</span><span class="token-punctuation">]</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"Unloaded skill: "</span> <span class="token-operator">+</span> <span class="token-variable">args</span><span class="token-punctuation">[</span><span class="token-number">1</span><span class="token-punctuation">]</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">&gt; </span><span class="command">/skill list</span><br>
+          <span class="output">  ○ debugging</span><br>
+          <span class="output">  ○ tdd</span><br>
+          <span class="output">  ○ code-review</span><br>
+          <br>
+          <span class="prompt">&gt; </span><span class="command">/skill load tdd</span><br>
+          <span class="output">  Loaded skill: tdd</span><br>
+          <br>
+          <span class="prompt">&gt; </span><span class="command">/skill list</span><br>
+          <span class="output">  ○ debugging</span><br>
+          <span class="output">  </span><span class="highlight">● tdd</span><br>
+          <span class="output">  ○ code-review</span><br>
+          <br>
+          <span class="prompt">&gt; </span><span class="command">帮我实现一个 LRU Cache</span><br>
+          <span class="output">  好的，按照 TDD 流程，我先写测试：</span><br>
+          <span class="output">  </span><br>
+          <span class="output">  ```java</span><br>
+          <span class="output">  @Test void evictsLeastRecentlyUsed() { ... }</span><br>
+          <span class="output">  ```</span><br>
+          <span class="output">  </span><br>
+          <span class="output">  测试写完了，现在来实现...</span>
+        </div>
+      </div>
+
+      <p>注意行为变化：加载 "tdd" Skill 后，AI 会自动先写测试再实现。这就是 Skill 的力量——不改代码，只改指令。</p>
+
+      <!-- ============================== Part 3 ============================== -->
+
+      <h2>Part 3：Custom Instructions</h2>
+
+      <p>Skill 需要手动加载。但有些偏好是持久的——比如"我总是用 JUnit 5"、"代码注释用中文"。Custom Instructions 让这些偏好自动生效。</p>
+
+      <h3>项目级指令</h3>
+
+      <p>从项目根目录读取配置文件。支持多种约定名称（兼容 Claude Code 的 <code>CLAUDE.md</code>）：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">loadProjectInstructions</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">var</span> <span class="token-variable">candidates</span> <span class="token-operator">=</span> <span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span>
+        <span class="token-type">Path</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-string">".minicode"</span><span class="token-punctuation">,</span> <span class="token-string">"instructions.md"</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span>
+        <span class="token-type">Path</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-string">"AGENTS.md"</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span>
+        <span class="token-type">Path</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-string">"CLAUDE.md"</span><span class="token-punctuation">)</span>
+    <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">p</span> <span class="token-operator">:</span> <span class="token-variable">candidates</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">resolved</span> <span class="token-operator">=</span> <span class="token-type">Path</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-function">getProperty</span><span class="token-punctuation">(</span><span class="token-string">"user.dir"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">resolve</span><span class="token-punctuation">(</span><span class="token-variable">p</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-type">Files</span><span class="token-punctuation">.</span><span class="token-function">exists</span><span class="token-punctuation">(</span><span class="token-variable">resolved</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">try</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-type">Files</span><span class="token-punctuation">.</span><span class="token-function">readString</span><span class="token-punctuation">(</span><span class="token-variable">resolved</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+            <span class="token-keyword">catch</span> <span class="token-punctuation">(</span><span class="token-type">IOException</span> <span class="token-variable">e</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-comment">/* continue */</span> <span class="token-punctuation">}</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+    <span class="token-keyword">return</span> <span class="token-string">""</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h3>全局指令</h3>
+
+      <p>用户级别的偏好放在 Home 目录。不管在哪个项目里都会生效：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">loadGlobalInstructions</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">var</span> <span class="token-variable">path</span> <span class="token-operator">=</span> <span class="token-type">Path</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-function">getProperty</span><span class="token-punctuation">(</span><span class="token-string">"user.home"</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span> <span class="token-string">".minicode"</span><span class="token-punctuation">,</span> <span class="token-string">"instructions.md"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">try</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-type">Files</span><span class="token-punctuation">.</span><span class="token-function">readString</span><span class="token-punctuation">(</span><span class="token-variable">path</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+    <span class="token-keyword">catch</span> <span class="token-punctuation">(</span><span class="token-type">IOException</span> <span class="token-variable">e</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">""</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h3>分层 Prompt 组装</h3>
+
+      <p>把所有来源的指令按优先级拼装成最终的 System Prompt：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">assembleSystemPrompt</span><span class="token-punctuation">(</span><span class="token-type">AgentContext</span> <span class="token-variable">ctx</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">var</span> <span class="token-variable">layers</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;</span><span class="token-type">String</span><span class="token-operator">&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-variable">layers</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">baseSystemPrompt</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">var</span> <span class="token-variable">global</span> <span class="token-operator">=</span> <span class="token-function">loadGlobalInstructions</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-operator">!</span><span class="token-variable">global</span><span class="token-punctuation">.</span><span class="token-function">isBlank</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-variable">layers</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">global</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">var</span> <span class="token-variable">project</span> <span class="token-operator">=</span> <span class="token-function">loadProjectInstructions</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-operator">!</span><span class="token-variable">project</span><span class="token-punctuation">.</span><span class="token-function">isBlank</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-variable">layers</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">project</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">skill</span> <span class="token-operator">:</span> <span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">activeSkills</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">layers</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-string">"&lt;skill name=\""</span> <span class="token-operator">+</span> <span class="token-variable">skill</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">+</span> <span class="token-string">"\"&gt;\n"</span> <span class="token-operator">+</span> <span class="token-variable">skill</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">+</span> <span class="token-string">"\n&lt;/skill&gt;"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">return</span> <span class="token-type">String</span><span class="token-punctuation">.</span><span class="token-function">join</span><span class="token-punctuation">(</span><span class="token-string">"\n\n---\n\n"</span><span class="token-punctuation">,</span> <span class="token-variable">layers</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <div class="info-box">
+        <div class="info-box-title">优先级规则</div>
+        <p>优先级从低到高：基础指令 → 全局偏好 → 项目规则 → 主动加载的 Skills。和 Claude Code 的 CLAUDE.md 分层机制一致。后加载的内容优先级更高，可以覆盖前面的指令。</p>
+      </div>
+
+      <h3>示例：项目级指令文件</h3>
+
+      <p>在项目根目录创建 <code>.minicode/instructions.md</code>：</p>
+
+      <pre data-lang="markdown"><code><span class="token-comment"># 项目规则</span>
+
+<span class="token-comment">## 代码风格</span>
+- 使用 Java 21，充分利用 Record、Pattern Matching、Virtual Threads
+- 变量命名用 camelCase，常量用 UPPER_SNAKE_CASE
+- 方法不超过 20 行，类不超过 200 行
+
+<span class="token-comment">## 测试</span>
+- 测试框架：JUnit 5 + AssertJ
+- 覆盖率目标：核心逻辑 > 80%
+- 测试方法命名：should_期望行为_when_条件
+
+<span class="token-comment">## 依赖</span>
+- HTTP 客户端：java.net.http（不要引入第三方）
+- JSON：Jackson
+- 构建：Maven（不要用 Gradle）
+
+<span class="token-comment">## 禁止</span>
+- 不要使用 Lombok
+- 不要添加未讨论过的新依赖
+- 不要修改 pom.xml 除非明确要求</code></pre>
+
+      <!-- ============================== Part 4 ============================== -->
+
+      <h2>Part 4：自动技能建议（进阶）</h2>
+
+      <p>更进一步：根据用户消息的关键词，主动建议加载对应的 Skill。不强制，只提示。</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public</span> <span class="token-type">Optional</span><span class="token-operator">&lt;</span><span class="token-type">Skill</span><span class="token-operator">&gt;</span> <span class="token-function">suggestSkill</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">message</span><span class="token-punctuation">,</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">Skill</span><span class="token-operator">&gt;</span> <span class="token-variable">available</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">var</span> <span class="token-variable">lower</span> <span class="token-operator">=</span> <span class="token-variable">message</span><span class="token-punctuation">.</span><span class="token-function">toLowerCase</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">lower</span><span class="token-punctuation">.</span><span class="token-function">contains</span><span class="token-punctuation">(</span><span class="token-string">"bug"</span><span class="token-punctuation">)</span> <span class="token-operator">||</span> <span class="token-variable">lower</span><span class="token-punctuation">.</span><span class="token-function">contains</span><span class="token-punctuation">(</span><span class="token-string">"error"</span><span class="token-punctuation">)</span> <span class="token-operator">||</span> <span class="token-variable">lower</span><span class="token-punctuation">.</span><span class="token-function">contains</span><span class="token-punctuation">(</span><span class="token-string">"不工作"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">return</span> <span class="token-variable">available</span><span class="token-punctuation">.</span><span class="token-function">stream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">filter</span><span class="token-punctuation">(</span><span class="token-variable">s</span> <span class="token-operator">-&gt;</span> <span class="token-variable">s</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"debugging"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">findFirst</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">lower</span><span class="token-punctuation">.</span><span class="token-function">contains</span><span class="token-punctuation">(</span><span class="token-string">"测试"</span><span class="token-punctuation">)</span> <span class="token-operator">||</span> <span class="token-variable">lower</span><span class="token-punctuation">.</span><span class="token-function">contains</span><span class="token-punctuation">(</span><span class="token-string">"test"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">return</span> <span class="token-variable">available</span><span class="token-punctuation">.</span><span class="token-function">stream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">filter</span><span class="token-punctuation">(</span><span class="token-variable">s</span> <span class="token-operator">-&gt;</span> <span class="token-variable">s</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"tdd"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">findFirst</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+    <span class="token-keyword">return</span> <span class="token-type">Optional</span><span class="token-punctuation">.</span><span class="token-function">empty</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>在 REPL 中使用：</p>
+
+      <pre data-lang="java"><code><span class="token-comment">// 发送给 AI 前检查</span>
+<span class="token-keyword">var</span> <span class="token-variable">suggestion</span> <span class="token-operator">=</span> <span class="token-function">suggestSkill</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">,</span> <span class="token-variable">allSkills</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-variable">suggestion</span><span class="token-punctuation">.</span><span class="token-function">ifPresent</span><span class="token-punctuation">(</span><span class="token-variable">skill</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-operator">!</span><span class="token-variable">ctx</span><span class="token-punctuation">.</span><span class="token-function">activeSkills</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">contains</span><span class="token-punctuation">(</span><span class="token-variable">skill</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">printf</span><span class="token-punctuation">(</span><span class="token-string">"  [hint] Consider: /skill load %s%n"</span><span class="token-punctuation">,</span> <span class="token-variable">skill</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span></code></pre>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">&gt; </span><span class="command">这个方法有 bug，返回值不对</span><br>
+          <span class="output">  [hint] Consider: /skill load debugging</span><br>
+          <br>
+          <span class="output">  让我来看看这个方法...</span>
+        </div>
+      </div>
+
+      <!-- ============================== 架构图 ============================== -->
+
+      <h2>架构总览</h2>
+
+      <p>System Prompt 的最终组装过程：</p>
+
+      <div style="text-align: center; margin: 2rem 0;">
+        <svg width="420" height="340" viewBox="0 0 420 340" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Layer 1: Base -->
+          <rect x="60" y="20" width="300" height="50" rx="6" fill="#1a1a2e" stroke="#4a4a6a" stroke-width="1.5"/>
+          <text x="210" y="50" text-anchor="middle" fill="#a0a0c0" font-size="14" font-family="monospace">Base System Prompt</text>
+          
+          <!-- Arrow 1 -->
+          <path d="M210 70 L210 85" stroke="#4a4a6a" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          
+          <!-- Layer 2: Global -->
+          <rect x="60" y="90" width="300" height="50" rx="6" fill="#1a2e1a" stroke="#4a6a4a" stroke-width="1.5"/>
+          <text x="210" y="114" text-anchor="middle" fill="#a0c0a0" font-size="13" font-family="monospace">~/.minicode/instructions.md</text>
+          <text x="210" y="130" text-anchor="middle" fill="#6a8a6a" font-size="11" font-family="monospace">Global Instructions</text>
+          
+          <!-- Arrow 2 -->
+          <path d="M210 140 L210 155" stroke="#4a4a6a" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          
+          <!-- Layer 3: Project -->
+          <rect x="60" y="160" width="300" height="50" rx="6" fill="#2e2e1a" stroke="#6a6a4a" stroke-width="1.5"/>
+          <text x="210" y="184" text-anchor="middle" fill="#c0c0a0" font-size="13" font-family="monospace">.minicode/instructions.md</text>
+          <text x="210" y="200" text-anchor="middle" fill="#8a8a6a" font-size="11" font-family="monospace">Project Instructions</text>
+          
+          <!-- Arrow 3 -->
+          <path d="M210 210 L210 225" stroke="#4a4a6a" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          
+          <!-- Layer 4: Skills -->
+          <rect x="60" y="230" width="300" height="50" rx="6" fill="#2e1a2e" stroke="#6a4a6a" stroke-width="1.5"/>
+          <text x="210" y="254" text-anchor="middle" fill="#c0a0c0" font-size="13" font-family="monospace">&lt;skill&gt; tdd, debugging, ... &lt;/skill&gt;</text>
+          <text x="210" y="270" text-anchor="middle" fill="#8a6a8a" font-size="11" font-family="monospace">Active Skills</text>
+          
+          <!-- Arrow 4 -->
+          <path d="M210 280 L210 295" stroke="#4a4a6a" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          
+          <!-- Result -->
+          <rect x="60" y="300" width="300" height="30" rx="4" fill="#2a4a6a" stroke="#5a8aba" stroke-width="2"/>
+          <text x="210" y="320" text-anchor="middle" fill="white" font-size="13" font-weight="bold" font-family="monospace">Final System Prompt</text>
+          
+          <!-- Priority label -->
+          <text x="390" y="50" text-anchor="start" fill="#6a6a8a" font-size="10" font-family="monospace">低</text>
+          <text x="390" y="260" text-anchor="start" fill="#6a6a8a" font-size="10" font-family="monospace">高</text>
+          <path d="M395 58 L395 245" stroke="#6a6a8a" stroke-width="1" stroke-dasharray="3 3" marker-end="url(#arrowhead2)"/>
+          <text x="380" y="155" text-anchor="middle" fill="#6a6a8a" font-size="10" font-family="monospace" transform="rotate(-90 385 155)">优先级</text>
+          
+          <!-- Arrowhead markers -->
+          <defs>
+            <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#4a4a6a"/>
+            </marker>
+            <marker id="arrowhead2" markerWidth="6" markerHeight="5" refX="6" refY="2.5" orient="auto">
+              <polygon points="0 0, 6 2.5, 0 5" fill="#6a6a8a"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+
+      <!-- ============================== 小结 ============================== -->
+
+      <h2>本章小结</h2>
+
+      <div class="card-grid">
+        <div class="card">
+          <div class="card-title">Slash Commands</div>
+          <div class="card-description">本地快捷操作。不经过 AI，直接在 REPL 中执行。清除对话、切换模型、管理 Skills。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Skills</div>
+          <div class="card-description">可加载的行为指令集。注入 System Prompt，改变 AI 的工作方式。TDD、调试、Code Review 都可以是 Skill。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Custom Instructions</div>
+          <div class="card-description">持久化的偏好设定。全局级和项目级分层，自动加载，无需手动操作。</div>
+        </div>
+      </div>
+
+      <p>MCP 扩展「能做什么」，Skill 系统扩展「怎么做」。两者组合让 MiniCode 成为真正可定制的编程助手。</p>
+
+      <p>工具决定能力边界，行为决定工作质量。这是两个正交的扩展维度——一个向外扩展功能，一个向内提升方法。到这里，MiniCode 已经具备了一个生产级 AI 编程助手的全部核心架构。</p>
+
+      <nav class="chapter-nav">
+        <a href="08-ship-it.html">
+          <span class="nav-label">上一章</span>
+          <span class="nav-title">打包发布</span>
+        </a>
+        <a href="../index.html" style="margin-left: auto;">
+          <span class="nav-label">返回</span>
+          <span class="nav-title">返回目录</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+</body>
+</html>
