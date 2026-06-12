@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>08 - 打包发布 | MiniCode (Java) 教程</title>
+  <link rel="stylesheet" href="../styles/main.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    <nav class="sidebar">
+      <a href="../index.html" class="sidebar-logo">
+        <span class="logo-mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/></svg></span>
+        MiniCode (Java)
+      </a>
+      <ul class="sidebar-nav">
+        <li><a href="01-hello-claude.html"><span class="chapter-num">01</span> Hello, Claude</a></li>
+        <li><a href="02-streaming-repl.html"><span class="chapter-num">02</span> 流式对话</a></li>
+        <li><a href="03-first-tool.html"><span class="chapter-num">03</span> 第一个工具</a></li>
+        <li><a href="04-tool-registry.html"><span class="chapter-num">04</span> 工具注册表</a></li>
+        <li><a href="05-security.html"><span class="chapter-num">05</span> 安全防护</a></li>
+        <li><a href="06-mcp.html"><span class="chapter-num">06</span> MCP 插件</a></li>
+        <li><a href="07-context.html"><span class="chapter-num">07</span> Context 管理</a></li>
+        <li><a href="08-ship-it.html" class="active"><span class="chapter-num">08</span> 打包发布</a></li>
+      </ul>
+    </nav>
+
+    <main class="main-content">
+      <header class="chapter-header">
+        <span class="chapter-number">Chapter 08</span>
+        <h1 class="chapter-title">打包发布</h1>
+        <p class="chapter-subtitle">一直用 <code>mvn exec:java</code> 运行。是时候变成一个真正的命令行工具了。</p>
+      </header>
+
+      <p>到目前为止你一直在 IDE 里或者用 <code>mvn exec:java -Dexec.mainClass="com.minicode.Main"</code> 运行 MiniCode。想给同事用？"先装 Maven，然后 clone 仓库，然后..."——没人会用的。</p>
+
+      <p>这一章把 MiniCode 变成一个可以双击运行的 JAR，甚至一个原生可执行文件。</p>
+
+      <h2>项目结构整理</h2>
+
+      <p>经过前七章的迭代，最终的项目结构应该是这样的：</p>
+
+      <div class="file-tree">
+<span class="folder">minicode/</span>
+├── <span class="folder">src/</span>
+│   ├── <span class="folder">main/java/com/minicode/</span>
+│   │   ├── <span class="highlight-file">Main.java</span>           <span class="file">// 入口 + Agent Loop</span>
+│   │   ├── <span class="highlight-file">ToolRegistry.java</span>   <span class="file">// 工具注册表</span>
+│   │   ├── <span class="highlight-file">Security.java</span>       <span class="file">// 权限规则引擎</span>
+│   │   ├── <span class="highlight-file">MCPClient.java</span>      <span class="file">// MCP 客户端</span>
+│   │   ├── <span class="highlight-file">ContextManager.java</span> <span class="file">// Context 压缩</span>
+│   │   └── <span class="folder">tools/</span>
+│   │       ├── <span class="file">ReadFileTool.java</span>
+│   │       ├── <span class="file">WriteFileTool.java</span>
+│   │       ├── <span class="file">BashTool.java</span>
+│   │       └── <span class="file">GrepTool.java</span>
+│   └── <span class="folder">test/java/com/minicode/</span>
+│       ├── <span class="file">ToolRegistryTest.java</span>
+│       └── <span class="file">SecurityTest.java</span>
+├── <span class="highlight-file">pom.xml</span>
+└── <span class="file">minicode.sh</span>
+      </div>
+
+      <h2>测试</h2>
+
+      <p>发布之前先确保核心逻辑是对的。用 JUnit 5 写几个关键测试：</p>
+
+      <h3>ToolRegistry 测试</h3>
+
+      <pre data-lang="java"><code><span class="token-keyword">import static</span> <span class="token-variable">org</span><span class="token-punctuation">.</span><span class="token-variable">junit</span><span class="token-punctuation">.</span><span class="token-variable">jupiter</span><span class="token-punctuation">.</span><span class="token-variable">api</span><span class="token-punctuation">.</span><span class="token-type">Assertions</span><span class="token-punctuation">.</span><span class="token-operator">*</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">class</span> <span class="token-type">ToolRegistryTest</span> <span class="token-punctuation">{</span>
+
+    <span class="token-keyword">@Test</span>
+    <span class="token-keyword">void</span> <span class="token-function">registryExecutesRegisteredTool</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">registry</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ToolRegistry</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">registry</span><span class="token-punctuation">.</span><span class="token-function">register</span><span class="token-punctuation">(</span><span class="token-keyword">new</span> <span class="token-type">Tool</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"echo"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+            <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span> <span class="token-keyword">return</span> <span class="token-string">"Echoes input"</span><span class="token-punctuation">;</span> <span class="token-punctuation">}</span>
+            <span class="token-keyword">public</span> <span class="token-type">Map</span><span class="token-operator">&lt;</span><span class="token-type">String</span><span class="token-punctuation">,</span> <span class="token-type">Object</span><span class="token-operator">&gt;</span> <span class="token-function">inputSchema</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-keyword">return</span> <span class="token-type">Map</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span>
+            <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-type">JsonNode</span> <span class="token-variable">input</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-keyword">return</span> <span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"text"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span>
+        <span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">input</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ObjectMapper</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"text"</span><span class="token-punctuation">,</span> <span class="token-string">"hello"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-function">assertEquals</span><span class="token-punctuation">(</span><span class="token-string">"hello"</span><span class="token-punctuation">,</span> <span class="token-variable">registry</span><span class="token-punctuation">.</span><span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-string">"echo"</span><span class="token-punctuation">,</span> <span class="token-variable">input</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">@Test</span>
+    <span class="token-keyword">void</span> <span class="token-function">registryReturnsErrorForUnknown</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">registry</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ToolRegistry</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">result</span> <span class="token-operator">=</span> <span class="token-variable">registry</span><span class="token-punctuation">.</span><span class="token-function">execute</span><span class="token-punctuation">(</span>
+            <span class="token-string">"nope"</span><span class="token-punctuation">,</span> <span class="token-keyword">new</span> <span class="token-type">ObjectMapper</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-function">assertTrue</span><span class="token-punctuation">(</span><span class="token-variable">result</span><span class="token-punctuation">.</span><span class="token-function">contains</span><span class="token-punctuation">(</span><span class="token-string">"Error"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h3>Security 测试</h3>
+
+      <pre data-lang="java"><code><span class="token-keyword">class</span> <span class="token-type">SecurityTest</span> <span class="token-punctuation">{</span>
+
+    <span class="token-keyword">@Test</span>
+    <span class="token-keyword">void</span> <span class="token-function">denysDangerousCommands</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">input</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ObjectMapper</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"command"</span><span class="token-punctuation">,</span> <span class="token-string">"rm -rf /"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-function">assertEquals</span><span class="token-punctuation">(</span>
+            <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">DENY</span><span class="token-punctuation">,</span>
+            <span class="token-type">Security</span><span class="token-punctuation">.</span><span class="token-function">checkPermission</span><span class="token-punctuation">(</span><span class="token-string">"bash"</span><span class="token-punctuation">,</span> <span class="token-variable">input</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">@Test</span>
+    <span class="token-keyword">void</span> <span class="token-function">allowsReadOperations</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">input</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ObjectMapper</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"path"</span><span class="token-punctuation">,</span> <span class="token-string">"foo.java"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-function">assertEquals</span><span class="token-punctuation">(</span>
+            <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">ALLOW</span><span class="token-punctuation">,</span>
+            <span class="token-type">Security</span><span class="token-punctuation">.</span><span class="token-function">checkPermission</span><span class="token-punctuation">(</span><span class="token-string">"read_file"</span><span class="token-punctuation">,</span> <span class="token-variable">input</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">@Test</span>
+    <span class="token-keyword">void</span> <span class="token-function">allowsSafeCommands</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">input</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ObjectMapper</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"command"</span><span class="token-punctuation">,</span> <span class="token-string">"mvn test"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-function">assertEquals</span><span class="token-punctuation">(</span>
+            <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">ALLOW</span><span class="token-punctuation">,</span>
+            <span class="token-type">Security</span><span class="token-punctuation">.</span><span class="token-function">checkPermission</span><span class="token-punctuation">(</span><span class="token-string">"bash"</span><span class="token-punctuation">,</span> <span class="token-variable">input</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">@Test</span>
+    <span class="token-keyword">void</span> <span class="token-function">asksForUnknownTools</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">input</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ObjectMapper</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"content"</span><span class="token-punctuation">,</span> <span class="token-string">"hello"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-function">assertEquals</span><span class="token-punctuation">(</span>
+            <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">ASK</span><span class="token-punctuation">,</span>
+            <span class="token-type">Security</span><span class="token-punctuation">.</span><span class="token-function">checkPermission</span><span class="token-punctuation">(</span><span class="token-string">"write_file"</span><span class="token-punctuation">,</span> <span class="token-variable">input</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">$ </span><span class="command">mvn test</span><br>
+          <span class="output">[INFO] Running com.minicode.ToolRegistryTest</span><br>
+          <span class="output">[INFO] Tests run: 2, Failures: 0</span><br>
+          <span class="output">[INFO] Running com.minicode.SecurityTest</span><br>
+          <span class="output">[INFO] Tests run: 4, Failures: 0</span><br>
+          <span class="output">[INFO] </span><span class="highlight">BUILD SUCCESS</span>
+        </div>
+      </div>
+
+      <h2>Fat JAR 打包</h2>
+
+      <p>用 maven-shade-plugin 把所有依赖打进一个 JAR。这样用户只需要一个文件就能运行：</p>
+
+      <pre data-lang="xml"><code><span class="token-operator">&lt;</span><span class="token-keyword">build</span><span class="token-operator">&gt;</span>
+  <span class="token-operator">&lt;</span><span class="token-keyword">plugins</span><span class="token-operator">&gt;</span>
+    <span class="token-operator">&lt;</span><span class="token-keyword">plugin</span><span class="token-operator">&gt;</span>
+      <span class="token-operator">&lt;</span><span class="token-variable">groupId</span><span class="token-operator">&gt;</span>org.apache.maven.plugins<span class="token-operator">&lt;/</span><span class="token-variable">groupId</span><span class="token-operator">&gt;</span>
+      <span class="token-operator">&lt;</span><span class="token-variable">artifactId</span><span class="token-operator">&gt;</span>maven-shade-plugin<span class="token-operator">&lt;/</span><span class="token-variable">artifactId</span><span class="token-operator">&gt;</span>
+      <span class="token-operator">&lt;</span><span class="token-variable">version</span><span class="token-operator">&gt;</span>3.5.0<span class="token-operator">&lt;/</span><span class="token-variable">version</span><span class="token-operator">&gt;</span>
+      <span class="token-operator">&lt;</span><span class="token-keyword">executions</span><span class="token-operator">&gt;</span>
+        <span class="token-operator">&lt;</span><span class="token-keyword">execution</span><span class="token-operator">&gt;</span>
+          <span class="token-operator">&lt;</span><span class="token-variable">phase</span><span class="token-operator">&gt;</span>package<span class="token-operator">&lt;/</span><span class="token-variable">phase</span><span class="token-operator">&gt;</span>
+          <span class="token-operator">&lt;</span><span class="token-keyword">goals</span><span class="token-operator">&gt;&lt;</span><span class="token-variable">goal</span><span class="token-operator">&gt;</span>shade<span class="token-operator">&lt;/</span><span class="token-variable">goal</span><span class="token-operator">&gt;&lt;/</span><span class="token-keyword">goals</span><span class="token-operator">&gt;</span>
+          <span class="token-operator">&lt;</span><span class="token-keyword">configuration</span><span class="token-operator">&gt;</span>
+            <span class="token-operator">&lt;</span><span class="token-keyword">transformers</span><span class="token-operator">&gt;</span>
+              <span class="token-operator">&lt;</span><span class="token-keyword">transformer</span> <span class="token-variable">implementation</span>=<span class="token-string">"org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"</span><span class="token-operator">&gt;</span>
+                <span class="token-operator">&lt;</span><span class="token-variable">mainClass</span><span class="token-operator">&gt;</span>com.minicode.Main<span class="token-operator">&lt;/</span><span class="token-variable">mainClass</span><span class="token-operator">&gt;</span>
+              <span class="token-operator">&lt;/</span><span class="token-keyword">transformer</span><span class="token-operator">&gt;</span>
+            <span class="token-operator">&lt;/</span><span class="token-keyword">transformers</span><span class="token-operator">&gt;</span>
+          <span class="token-operator">&lt;/</span><span class="token-keyword">configuration</span><span class="token-operator">&gt;</span>
+        <span class="token-operator">&lt;/</span><span class="token-keyword">execution</span><span class="token-operator">&gt;</span>
+      <span class="token-operator">&lt;/</span><span class="token-keyword">executions</span><span class="token-operator">&gt;</span>
+    <span class="token-operator">&lt;/</span><span class="token-keyword">plugin</span><span class="token-operator">&gt;</span>
+  <span class="token-operator">&lt;/</span><span class="token-keyword">plugins</span><span class="token-operator">&gt;</span>
+<span class="token-operator">&lt;/</span><span class="token-keyword">build</span><span class="token-operator">&gt;</span></code></pre>
+
+      <h2>构建和运行</h2>
+
+      <pre data-lang="bash"><code><span class="token-comment"># 打包（跳过测试加速，正式发布时不要跳）</span>
+<span class="token-variable">mvn</span> clean package -DskipTests
+
+<span class="token-comment"># 运行</span>
+<span class="token-variable">java</span> -jar target/minicode-1.0-SNAPSHOT.jar</code></pre>
+
+      <p>一个命令就能启动。但还可以更简洁。</p>
+
+      <h2>Shell 包装脚本</h2>
+
+      <p>创建 <code>minicode.sh</code>，让用户可以像原生命令一样使用：</p>
+
+      <pre data-lang="bash"><code><span class="token-comment">#!/bin/bash</span>
+<span class="token-variable">SCRIPT_DIR</span>=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &amp;&gt; /dev/null &amp;&amp; pwd )
+<span class="token-variable">java</span> -jar "$SCRIPT_DIR/minicode.jar" "$@"</code></pre>
+
+      <pre data-lang="bash"><code><span class="token-comment"># 安装</span>
+<span class="token-variable">cp</span> target/minicode-1.0-SNAPSHOT.jar ~/bin/minicode.jar
+<span class="token-variable">cp</span> minicode.sh ~/bin/minicode
+<span class="token-variable">chmod</span> +x ~/bin/minicode
+
+<span class="token-comment"># 使用</span>
+<span class="token-variable">minicode</span></code></pre>
+
+      <h2>进阶：GraalVM 原生镜像</h2>
+
+      <p>如果你追求极致的启动速度，GraalVM 的 native-image 可以把 JAR 编译成原生可执行文件：</p>
+
+      <pre data-lang="bash"><code><span class="token-comment"># 安装 GraalVM（macOS）</span>
+<span class="token-variable">sdk</span> install java 21.0.2-graalce
+
+<span class="token-comment"># 编译为原生可执行文件</span>
+<span class="token-variable">native-image</span> -jar target/minicode-1.0-SNAPSHOT.jar minicode
+
+<span class="token-comment"># 毫秒级启动！</span>
+<span class="token-variable">./minicode</span></code></pre>
+
+      <div class="info-box warning">
+        <div class="info-box-title">GraalVM 的代价</div>
+        <p>native-image 需要处理反射配置（Jackson 大量使用反射）、编译时间长（几分钟）、调试困难。对于一个 CLI 工具来说，Java 21 的启动速度（~300ms）已经足够好了。GraalVM 是锦上添花，不是必需品。</p>
+      </div>
+
+      <h2>全书回顾</h2>
+
+      <p>八章写完。从一个 API 调用到一个完整的 AI 编程助手。回顾一下我们构建了什么：</p>
+
+      <div class="card-grid">
+        <div class="card">
+          <div class="card-title">Ch.1 Hello, Claude</div>
+          <div class="card-description">最小 API 调用。证明能跑通。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Ch.2 流式对话</div>
+          <div class="card-description">SSE 流式输出 + REPL 交互循环。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Ch.3 第一个工具</div>
+          <div class="card-description">read_file 工具。AI 开始能"看"代码。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Ch.4 工具注册表</div>
+          <div class="card-description">Tool 接口 + Registry 模式。可扩展架构。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Ch.5 安全防护</div>
+          <div class="card-description">权限规则引擎。不让 AI 误删文件。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Ch.6 MCP 插件</div>
+          <div class="card-description">JSON-RPC 协议。外部工具热插拔。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Ch.7 Context 管理</div>
+          <div class="card-description">压缩 + 裁剪。长对话不再崩溃。</div>
+        </div>
+        <div class="card">
+          <div class="card-title">Ch.8 打包发布</div>
+          <div class="card-description">Fat JAR + 测试。可以给别人用了。</div>
+        </div>
+      </div>
+
+      <h2>继续探索</h2>
+
+      <p>MiniCode 是一个教学项目，但它的架构是真实的。以下是一些值得继续探索的方向：</p>
+
+      <ul>
+        <li><strong>Spring Boot 集成</strong> — 用 Spring DI 管理 Tool 注册，用 Spring Shell 增强 CLI 体验</li>
+        <li><strong>Quarkus CLI</strong> — Quarkus 的 Picocli 扩展 + GraalVM 原生编译，毫秒级启动</li>
+        <li><strong>多 Agent 协作</strong> — 多个 Claude 实例分工合作：一个规划，一个执行，一个 review</li>
+        <li><strong>Web UI</strong> — Spring WebFlux + WebSocket，把 MiniCode 变成 Web 应用</li>
+        <li><strong>Virtual Threads</strong> — Java 21 虚拟线程并行执行多个工具调用</li>
+        <li><strong>持久化会话</strong> — 把对话历史存到文件，下次继续</li>
+      </ul>
+
+      <hr>
+
+      <p>你用 Java 实现了一个 AI 编程助手的全部核心组件。从第一个 API 调用到可发布的命令行工具，每一步都是你自己写的。没有框架魔法，没有黑盒抽象。</p>
+
+      <p>去用它写代码吧。</p>
+
+      <nav class="chapter-nav">
+        <a href="07-context.html">
+          <span class="nav-label">上一章</span>
+          <span class="nav-title">Context 管理</span>
+        </a>
+        <a href="../index.html" style="margin-left: auto;">
+          <span class="nav-label">返回</span>
+          <span class="nav-title">返回目录</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+</body>
+</html>

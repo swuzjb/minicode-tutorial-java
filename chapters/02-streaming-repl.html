@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>02 - 流式对话 | MiniCode (Java) 教程</title>
+  <link rel="stylesheet" href="../styles/main.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    <nav class="sidebar">
+      <a href="../index.html" class="sidebar-logo">
+        <span class="logo-mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/></svg></span>
+        MiniCode (Java)
+      </a>
+      <ul class="sidebar-nav">
+        <li><a href="01-hello-claude.html"><span class="chapter-num">01</span> Hello, Claude</a></li>
+        <li><a href="02-streaming-repl.html" class="active"><span class="chapter-num">02</span> 流式对话</a></li>
+        <li><a href="03-first-tool.html"><span class="chapter-num">03</span> 第一个工具</a></li>
+        <li><a href="04-tool-registry.html"><span class="chapter-num">04</span> 工具注册表</a></li>
+        <li><a href="05-security.html"><span class="chapter-num">05</span> 安全防护</a></li>
+        <li><a href="06-mcp.html"><span class="chapter-num">06</span> MCP 插件</a></li>
+        <li><a href="07-context.html"><span class="chapter-num">07</span> Context 管理</a></li>
+        <li><a href="08-ship-it.html"><span class="chapter-num">08</span> 打包发布</a></li>
+      </ul>
+    </nav>
+
+    <main class="main-content">
+      <header class="chapter-header">
+        <span class="chapter-number">Chapter 02</span>
+        <h1 class="chapter-title">流式对话</h1>
+        <p class="chapter-subtitle">REPL 循环 + 流式输出 —— 打字机效果，多轮记忆</p>
+      </header>
+
+      <p>上一章我们的程序只能说一句话就退出了。这一章我们给它加上交互循环（REPL）和流式输出——让它像真正的 AI 聊天工具一样，逐字输出回复，并记住上下文。</p>
+
+      <h2>第一步：加入 REPL</h2>
+
+      <p>先不管流式，我们先让程序能多轮对话。用 <code>Scanner</code> 读取用户输入，用一个 <code>List&lt;MessageParam&gt;</code> 保存对话历史：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">package</span> <span class="token-variable">com.minicode</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.client.AnthropicClient</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.models.messages.*</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">import</span> <span class="token-variable">java.util.ArrayList</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.util.List</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.util.Scanner</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">public</span> <span class="token-keyword">class</span> <span class="token-type">Main</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">private</span> <span class="token-keyword">static</span> <span class="token-keyword">final</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">MessageParam</span><span class="token-operator">&gt;</span> <span class="token-variable">messages</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">public</span> <span class="token-keyword">static</span> <span class="token-keyword">void</span> <span class="token-function">main</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">client</span> <span class="token-operator">=</span> <span class="token-type">AnthropicClient</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">apiKey</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-function">getenv</span><span class="token-punctuation">(</span><span class="token-string">"ANTHROPIC_API_KEY"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">scanner</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">Scanner</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">in</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"MiniCode v0.1 (type \"exit\" to quit)\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">while</span> <span class="token-punctuation">(</span><span class="token-keyword">true</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-string">"you&gt; "</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">var</span> <span class="token-variable">input</span> <span class="token-operator">=</span> <span class="token-variable">scanner</span><span class="token-punctuation">.</span><span class="token-function">nextLine</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">trim</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"exit"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">break</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">isEmpty</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">continue</span><span class="token-punctuation">;</span>
+
+            <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofUser</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-keyword">var</span> <span class="token-variable">response</span> <span class="token-operator">=</span> <span class="token-variable">client</span><span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">create</span><span class="token-punctuation">(</span>
+                <span class="token-type">MessageCreateParams</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">model</span><span class="token-punctuation">(</span><span class="token-string">"claude-sonnet-4-20250514"</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">maxTokens</span><span class="token-punctuation">(</span><span class="token-number">2048</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-variable">messages</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-keyword">var</span> <span class="token-variable">text</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">StringBuilder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">block</span> <span class="token-punctuation">:</span> <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">block</span> <span class="token-keyword">instanceof</span> <span class="token-type">ContentBlock.Text</span> <span class="token-variable">t</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                    <span class="token-variable">text</span><span class="token-punctuation">.</span><span class="token-function">append</span><span class="token-punctuation">(</span><span class="token-variable">t</span><span class="token-punctuation">.</span><span class="token-function">text</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                <span class="token-punctuation">}</span>
+            <span class="token-punctuation">}</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"\nassistant&gt; "</span> <span class="token-operator">+</span> <span class="token-variable">text</span> <span class="token-operator">+</span> <span class="token-string">"\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofAssistant</span><span class="token-punctuation">(</span><span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>关键点：每次 API 调用我们都传入完整的 <code>messages</code> 列表。Claude 自身是无状态的——它靠我们传递的消息历史来"记住"对话。</p>
+
+      <h2>第二步：流式输出</h2>
+
+      <p>上面的版本有个问题：你得等 Claude 把所有文字生成完才能看到结果。对于长回复，用户会盯着空白屏幕等好几秒。我们需要<strong>流式输出</strong>——像打字机一样逐字显示。</p>
+
+      <p>Anthropic Java SDK 提供了 <code>createStreaming</code> 方法。替换 API 调用部分：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">var</span> <span class="token-variable">stream</span> <span class="token-operator">=</span> <span class="token-variable">client</span><span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">createStreaming</span><span class="token-punctuation">(</span>
+    <span class="token-type">MessageCreateParams</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">model</span><span class="token-punctuation">(</span><span class="token-string">"claude-sonnet-4-20250514"</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">maxTokens</span><span class="token-punctuation">(</span><span class="token-number">2048</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-variable">messages</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+<span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+<span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-string">"\nassistant&gt; "</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-keyword">var</span> <span class="token-variable">finalMessage</span> <span class="token-operator">=</span> <span class="token-variable">stream</span>
+    <span class="token-punctuation">.</span><span class="token-function">onText</span><span class="token-punctuation">(</span><span class="token-variable">text</span> <span class="token-operator">-&gt;</span> <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-variable">text</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+    <span class="token-punctuation">.</span><span class="token-function">getFinalMessage</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+<span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofAssistant</span><span class="token-punctuation">(</span><span class="token-variable">finalMessage</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span></code></pre>
+
+      <div class="info-box note">
+        <div class="info-box-title">流式 API 的工作原理</div>
+        <p>底层使用 Server-Sent Events (SSE)。服务器不再一次性返回完整 JSON，而是逐块推送 <code>content_block_delta</code> 事件，每个事件包含一小段文本。SDK 的 <code>onText</code> 回调在每收到一段文本时触发，<code>getFinalMessage()</code> 在流结束后返回组装好的完整消息对象。</p>
+      </div>
+
+      <h2>完整的流式 REPL</h2>
+
+      <p>把两步合在一起，这就是完整的 <code>Main.java</code>：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">package</span> <span class="token-variable">com.minicode</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.client.AnthropicClient</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.models.messages.*</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">import</span> <span class="token-variable">java.util.ArrayList</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.util.List</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.util.Scanner</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">public</span> <span class="token-keyword">class</span> <span class="token-type">Main</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">private</span> <span class="token-keyword">static</span> <span class="token-keyword">final</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">MessageParam</span><span class="token-operator">&gt;</span> <span class="token-variable">messages</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">public</span> <span class="token-keyword">static</span> <span class="token-keyword">void</span> <span class="token-function">main</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">client</span> <span class="token-operator">=</span> <span class="token-type">AnthropicClient</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">apiKey</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-function">getenv</span><span class="token-punctuation">(</span><span class="token-string">"ANTHROPIC_API_KEY"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">scanner</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">Scanner</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">in</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"MiniCode v0.1 (type \"exit\" to quit)\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">while</span> <span class="token-punctuation">(</span><span class="token-keyword">true</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-string">"you&gt; "</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">var</span> <span class="token-variable">input</span> <span class="token-operator">=</span> <span class="token-variable">scanner</span><span class="token-punctuation">.</span><span class="token-function">nextLine</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">trim</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"exit"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">break</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">isEmpty</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">continue</span><span class="token-punctuation">;</span>
+
+            <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofUser</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-keyword">var</span> <span class="token-variable">stream</span> <span class="token-operator">=</span> <span class="token-variable">client</span><span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">createStreaming</span><span class="token-punctuation">(</span>
+                <span class="token-type">MessageCreateParams</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">model</span><span class="token-punctuation">(</span><span class="token-string">"claude-sonnet-4-20250514"</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">maxTokens</span><span class="token-punctuation">(</span><span class="token-number">2048</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-variable">messages</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-string">"\nassistant&gt; "</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">var</span> <span class="token-variable">finalMessage</span> <span class="token-operator">=</span> <span class="token-variable">stream</span>
+                <span class="token-punctuation">.</span><span class="token-function">onText</span><span class="token-punctuation">(</span><span class="token-variable">text</span> <span class="token-operator">-&gt;</span> <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-variable">text</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">getFinalMessage</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofAssistant</span><span class="token-punctuation">(</span><span class="token-variable">finalMessage</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h2>运行验证</h2>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">$ </span><span class="command">mvn compile exec:java -Dexec.mainClass="com.minicode.Main" -q</span><br>
+          <span class="output">MiniCode v0.1 (type "exit" to quit)</span><br><br>
+          <span class="prompt">you&gt; </span><span class="command">什么是 sealed interface？</span><br><br>
+          <span class="output">assistant&gt; sealed interface 是 Java 17 引入的特性，它限制了哪些类或接口</span><br>
+          <span class="output">可以实现/继承它。用 permits 子句声明允许的实现者...</span><br><br>
+          <span class="prompt">you&gt; </span><span class="command">给个例子</span><br><br>
+          <span class="output">assistant&gt; 基于我们刚才讨论的 sealed interface，这里是一个例子：</span><br>
+          <span class="output">sealed interface Shape permits Circle, Rectangle { ... }</span><br>
+          <span class="output">record Circle(double radius) implements Shape { ... }</span>
+        </div>
+      </div>
+
+      <p>注意第二轮对话里 Claude 说了"基于我们刚才讨论的"——它"记住了"上下文。这是因为我们把完整的消息列表传给了 API。</p>
+
+      <h2>流式 vs 非流式</h2>
+
+      <p>两种模式的对比：</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>特性</th>
+            <th>非流式 <code>create()</code></th>
+            <th>流式 <code>createStreaming()</code></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>首字节延迟</td>
+            <td>等全部生成完</td>
+            <td>约 200-500ms</td>
+          </tr>
+          <tr>
+            <td>用户体验</td>
+            <td>一次性显示全部</td>
+            <td>逐字打字机效果</td>
+          </tr>
+          <tr>
+            <td>超时风险</td>
+            <td>长回复可能超时</td>
+            <td>持续有数据不会超时</td>
+          </tr>
+          <tr>
+            <td>API 费用</td>
+            <td>相同</td>
+            <td>相同</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="info-box tip">
+        <div class="info-box-title">关于 SSE</div>
+        <p>底层协议是 HTTP 的 Server-Sent Events。服务器端保持连接不关闭，用 <code>data:</code> 前缀逐行推送 JSON 事件。SDK 帮我们处理了所有协议细节——你只需要注册 <code>onText</code> 回调即可。</p>
+      </div>
+
+      <div class="info-box tip">
+        <div class="info-box-title">本章成果</div>
+        <p>你现在有了一个交互式的流式聊天机器人。它能记住对话上下文，实时输出回复。但它只能"说话"——还不能操作你的文件系统。下一章我们教它读文件。</p>
+      </div>
+
+      <nav class="chapter-nav">
+        <a href="01-hello-claude.html">
+          <span class="nav-label">上一章</span>
+          <span class="nav-title">Hello, Claude</span>
+        </a>
+        <a href="03-first-tool.html">
+          <span class="nav-label">下一章</span>
+          <span class="nav-title">第一个工具</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+</body>
+</html>

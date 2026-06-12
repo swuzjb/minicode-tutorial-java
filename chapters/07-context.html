@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>07 - Context 管理 | MiniCode (Java) 教程</title>
+  <link rel="stylesheet" href="../styles/main.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    <nav class="sidebar">
+      <a href="../index.html" class="sidebar-logo">
+        <span class="logo-mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/></svg></span>
+        MiniCode (Java)
+      </a>
+      <ul class="sidebar-nav">
+        <li><a href="01-hello-claude.html"><span class="chapter-num">01</span> Hello, Claude</a></li>
+        <li><a href="02-streaming-repl.html"><span class="chapter-num">02</span> 流式对话</a></li>
+        <li><a href="03-first-tool.html"><span class="chapter-num">03</span> 第一个工具</a></li>
+        <li><a href="04-tool-registry.html"><span class="chapter-num">04</span> 工具注册表</a></li>
+        <li><a href="05-security.html"><span class="chapter-num">05</span> 安全防护</a></li>
+        <li><a href="06-mcp.html"><span class="chapter-num">06</span> MCP 插件</a></li>
+        <li><a href="07-context.html" class="active"><span class="chapter-num">07</span> Context 管理</a></li>
+        <li><a href="08-ship-it.html"><span class="chapter-num">08</span> 打包发布</a></li>
+      </ul>
+    </nav>
+
+    <main class="main-content">
+      <header class="chapter-header">
+        <span class="chapter-number">Chapter 07</span>
+        <h1 class="chapter-title">Context 管理</h1>
+        <p class="chapter-subtitle">用了一阵子，API 返回 400: context_length_exceeded。一个大 pom.xml 就是几千 token。</p>
+      </header>
+
+      <p>你让 MiniCode 帮你重构一个 Maven 多模块项目。它先读了几个 pom.xml，然后看了十来个 Java 文件，执行了几次 mvn 命令。一切顺利，直到第 20 轮对话——API 突然返回 400 错误。</p>
+
+      <p>原因很简单：每次 API 调用都要发送完整的对话历史。工具返回的文件内容、命令输出都在里面。一个 pom.xml 几千 token，一段 mvn 输出上万 token。累积起来很快就撞到 200K 的上限。</p>
+
+      <h2>关键洞察：不需要 tokenizer</h2>
+
+      <p>你可能想"用 tokenizer 计算每条消息的 token 数"。不用。Anthropic API 每次响应都告诉你这次请求用了多少 input token：</p>
+
+      <pre data-lang="java"><code><span class="token-comment">// response.usage() 直接告诉你</span>
+<span class="token-keyword">long</span> <span class="token-variable">inputTokens</span> <span class="token-operator">=</span> <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">usage</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">inputTokens</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-comment">// 这就是当前 context 的实际大小，精确到 token</span></code></pre>
+
+      <p>这是最精确的度量。不需要本地 tokenizer，不需要猜测，API 直接告诉你。</p>
+
+      <h2>Token 追踪</h2>
+
+      <p>在 agent loop 中追踪 context 使用率：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static</span> <span class="token-type">long</span> <span class="token-variable">lastInputTokens</span> <span class="token-operator">=</span> <span class="token-number">0</span><span class="token-punctuation">;</span>
+<span class="token-keyword">private static final</span> <span class="token-type">long</span> <span class="token-const">MAX_CONTEXT</span> <span class="token-operator">=</span> <span class="token-number">200_000</span><span class="token-punctuation">;</span>
+
+<span class="token-comment">// 每次 API 调用后更新</span>
+<span class="token-variable">lastInputTokens</span> <span class="token-operator">=</span> <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">usage</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">inputTokens</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-keyword">var</span> <span class="token-variable">utilization</span> <span class="token-operator">=</span> <span class="token-punctuation">(</span><span class="token-type">double</span><span class="token-punctuation">)</span> <span class="token-variable">lastInputTokens</span> <span class="token-operator">/</span> <span class="token-const">MAX_CONTEXT</span><span class="token-punctuation">;</span>
+<span class="token-function">showContextBar</span><span class="token-punctuation">(</span><span class="token-variable">utilization</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span></code></pre>
+
+      <h2>策略一：压缩工具返回</h2>
+
+      <p>最大的 token 消耗者通常是工具返回值。一个 <code>cat pom.xml</code> 返回的内容可能有 3000 token。但在对话后期，Claude 并不需要完整内容——它已经"看过"了。我们可以截断旧的工具返回：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">MessageParam</span><span class="token-operator">&gt;</span> <span class="token-function">compressToolResults</span><span class="token-punctuation">(</span><span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">MessageParam</span><span class="token-operator">&gt;</span> <span class="token-variable">messages</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">return</span> <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">stream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">map</span><span class="token-punctuation">(</span><span class="token-variable">msg</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">{</span>
+        <span class="token-comment">// 只处理 tool_result 类型的消息</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-operator">!</span><span class="token-function">isToolResult</span><span class="token-punctuation">(</span><span class="token-variable">msg</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-variable">msg</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">content</span> <span class="token-operator">=</span> <span class="token-function">getToolResultText</span><span class="token-punctuation">(</span><span class="token-variable">msg</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">lines</span> <span class="token-operator">=</span> <span class="token-variable">content</span><span class="token-punctuation">.</span><span class="token-function">split</span><span class="token-punctuation">(</span><span class="token-string">"\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">lines</span><span class="token-punctuation">.</span><span class="token-variable">length</span> <span class="token-operator">&lt;=</span> <span class="token-number">80</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-variable">msg</span><span class="token-punctuation">;</span>
+
+        <span class="token-comment">// 保留前 60 行 + 后 20 行，中间用省略标记</span>
+        <span class="token-keyword">var</span> <span class="token-variable">head</span> <span class="token-operator">=</span> <span class="token-type">String</span><span class="token-punctuation">.</span><span class="token-function">join</span><span class="token-punctuation">(</span><span class="token-string">"\n"</span><span class="token-punctuation">,</span> <span class="token-type">Arrays</span><span class="token-punctuation">.</span><span class="token-function">copyOfRange</span><span class="token-punctuation">(</span><span class="token-variable">lines</span><span class="token-punctuation">,</span> <span class="token-number">0</span><span class="token-punctuation">,</span> <span class="token-number">60</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">tail</span> <span class="token-operator">=</span> <span class="token-type">String</span><span class="token-punctuation">.</span><span class="token-function">join</span><span class="token-punctuation">(</span><span class="token-string">"\n"</span><span class="token-punctuation">,</span> <span class="token-type">Arrays</span><span class="token-punctuation">.</span><span class="token-function">copyOfRange</span><span class="token-punctuation">(</span><span class="token-variable">lines</span><span class="token-punctuation">,</span>
+            <span class="token-variable">lines</span><span class="token-punctuation">.</span><span class="token-variable">length</span> <span class="token-operator">-</span> <span class="token-number">20</span><span class="token-punctuation">,</span> <span class="token-variable">lines</span><span class="token-punctuation">.</span><span class="token-variable">length</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">int</span> <span class="token-variable">omitted</span> <span class="token-operator">=</span> <span class="token-variable">lines</span><span class="token-punctuation">.</span><span class="token-variable">length</span> <span class="token-operator">-</span> <span class="token-number">80</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">compressed</span> <span class="token-operator">=</span> <span class="token-variable">head</span> <span class="token-operator">+</span> <span class="token-string">"\n[... "</span> <span class="token-operator">+</span> <span class="token-variable">omitted</span> <span class="token-operator">+</span> <span class="token-string">" lines omitted ...]\n"</span> <span class="token-operator">+</span> <span class="token-variable">tail</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">return</span> <span class="token-function">replaceToolResultText</span><span class="token-punctuation">(</span><span class="token-variable">msg</span><span class="token-punctuation">,</span> <span class="token-variable">compressed</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">toList</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h2>策略二：丢弃旧消息</h2>
+
+      <p>如果压缩还不够，最后的手段是丢弃对话早期的消息。保留最近 N 轮对话，前面的用一句话概括：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">MessageParam</span><span class="token-operator">&gt;</span> <span class="token-function">dropOldMessages</span><span class="token-punctuation">(</span>
+        <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">MessageParam</span><span class="token-operator">&gt;</span> <span class="token-variable">messages</span><span class="token-punctuation">,</span> <span class="token-type">int</span> <span class="token-variable">keepRecent</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">size</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">&lt;=</span> <span class="token-variable">keepRecent</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-variable">messages</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">var</span> <span class="token-variable">notice</span> <span class="token-operator">=</span> <span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofUser</span><span class="token-punctuation">(</span>
+        <span class="token-string">"[Earlier messages removed to free context]"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">var</span> <span class="token-variable">recent</span> <span class="token-operator">=</span> <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">subList</span><span class="token-punctuation">(</span>
+        <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">size</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">-</span> <span class="token-variable">keepRecent</span><span class="token-punctuation">,</span> <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">size</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">var</span> <span class="token-variable">result</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;</span><span class="token-type">MessageParam</span><span class="token-operator">&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-variable">result</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">notice</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-variable">result</span><span class="token-punctuation">.</span><span class="token-function">addAll</span><span class="token-punctuation">(</span><span class="token-variable">recent</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">return</span> <span class="token-variable">result</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h2>集成到 Agent Loop</h2>
+
+      <p>在每次 API 调用前检查 context 使用率，渐进式触发压缩策略：</p>
+
+      <pre data-lang="java"><code><span class="token-comment">// 在 agent loop 的每次迭代中</span>
+<span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">lastInputTokens</span> <span class="token-operator">&gt;</span> <span class="token-const">MAX_CONTEXT</span> <span class="token-operator">*</span> <span class="token-number">0.8</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"  [context] Compressing tool results..."</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-variable">messages</span> <span class="token-operator">=</span> <span class="token-function">compressToolResults</span><span class="token-punctuation">(</span><span class="token-variable">messages</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span>
+<span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">lastInputTokens</span> <span class="token-operator">&gt;</span> <span class="token-const">MAX_CONTEXT</span> <span class="token-operator">*</span> <span class="token-number">0.9</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"  [context] Dropping old messages..."</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-variable">messages</span> <span class="token-operator">=</span> <span class="token-function">dropOldMessages</span><span class="token-punctuation">(</span><span class="token-variable">messages</span><span class="token-punctuation">,</span> <span class="token-number">10</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>两级策略：80% 时压缩工具输出（温和），90% 时丢弃旧消息（激进）。这样大多数情况下用户感知不到 context 管理的存在。</p>
+
+      <h2>CLI 进度条</h2>
+
+      <p>让用户直观地看到 context 使用情况。用 ANSI 转义码画一个彩色进度条：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static void</span> <span class="token-function">showContextBar</span><span class="token-punctuation">(</span><span class="token-type">double</span> <span class="token-variable">utilization</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-type">int</span> <span class="token-variable">width</span> <span class="token-operator">=</span> <span class="token-number">30</span><span class="token-punctuation">;</span>
+    <span class="token-type">int</span> <span class="token-variable">filled</span> <span class="token-operator">=</span> <span class="token-punctuation">(</span><span class="token-type">int</span><span class="token-punctuation">)</span> <span class="token-punctuation">(</span><span class="token-variable">utilization</span> <span class="token-operator">*</span> <span class="token-variable">width</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-type">String</span> <span class="token-variable">color</span> <span class="token-operator">=</span> <span class="token-variable">utilization</span> <span class="token-operator">&gt;</span> <span class="token-number">0.9</span> <span class="token-operator">?</span> <span class="token-string">"\033[31m"</span>   <span class="token-comment">// red</span>
+                 <span class="token-operator">:</span> <span class="token-variable">utilization</span> <span class="token-operator">&gt;</span> <span class="token-number">0.7</span> <span class="token-operator">?</span> <span class="token-string">"\033[33m"</span>   <span class="token-comment">// yellow</span>
+                 <span class="token-operator">:</span> <span class="token-string">"\033[32m"</span><span class="token-punctuation">;</span>                        <span class="token-comment">// green</span>
+
+    <span class="token-type">String</span> <span class="token-variable">bar</span> <span class="token-operator">=</span> <span class="token-variable">color</span>
+        <span class="token-operator">+</span> <span class="token-string">"\u2588"</span><span class="token-punctuation">.</span><span class="token-function">repeat</span><span class="token-punctuation">(</span><span class="token-variable">filled</span><span class="token-punctuation">)</span>
+        <span class="token-operator">+</span> <span class="token-string">"\033[90m"</span>
+        <span class="token-operator">+</span> <span class="token-string">"\u2591"</span><span class="token-punctuation">.</span><span class="token-function">repeat</span><span class="token-punctuation">(</span><span class="token-variable">width</span> <span class="token-operator">-</span> <span class="token-variable">filled</span><span class="token-punctuation">)</span>
+        <span class="token-operator">+</span> <span class="token-string">"\033[0m"</span><span class="token-punctuation">;</span>
+    <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">printf</span><span class="token-punctuation">(</span><span class="token-string">"  [%s] %.0f%% context used%n"</span><span class="token-punctuation">,</span> <span class="token-variable">bar</span><span class="token-punctuation">,</span> <span class="token-variable">utilization</span> <span class="token-operator">*</span> <span class="token-number">100</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">you: </span><span class="command">帮我重构 UserService</span><br><br>
+          <span class="output">  [read_file] src/main/java/com/app/UserService.java</span><br>
+          <span class="output">  [<span style="color:#9ece6a;">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span><span style="color:#565f89;">&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;</span>] 27% context used</span><br><br>
+          <span class="output">  ...</span><br><br>
+          <span class="output">  [<span style="color:#e0af68;">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span><span style="color:#565f89;">&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;</span>] 82% context used</span><br>
+          <span class="highlight">  [context] Compressing tool results...</span><br><br>
+          <span class="output">  ...</span><br><br>
+          <span class="output">  [<span style="color:#f7768e;">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span><span style="color:#565f89;">&#9617;&#9617;</span>] 93% context used</span><br>
+          <span class="highlight">  [context] Dropping old messages...</span><br>
+          <span class="output">  [<span style="color:#9ece6a;">&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;&#9608;</span><span style="color:#565f89;">&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;&#9617;</span>] 45% context used</span><br>
+          <span class="output">  Freed ~96,000 tokens. Continuing...</span>
+        </div>
+      </div>
+
+      <div class="info-box note">
+        <div class="info-box-title">进阶方向</div>
+        <p>更高级的 context 管理策略包括：用 Claude 自己来总结旧对话（消耗一次 API 调用但压缩率更高）、按工具返回的重要性评分、或者给不同类型的内容设置不同的 TTL。这些留给有兴趣的读者作为练习。</p>
+      </div>
+
+      <div class="info-box tip">
+        <div class="info-box-title">本章成果</div>
+        <p>MiniCode 现在能优雅地处理长对话了。context 快满时自动压缩和清理，用户能通过进度条直观看到使用率。不会再突然崩溃。下一章：把它打包成一个真正的命令行工具。</p>
+      </div>
+
+      <nav class="chapter-nav">
+        <a href="06-mcp.html">
+          <span class="nav-label">上一章</span>
+          <span class="nav-title">MCP 插件</span>
+        </a>
+        <a href="08-ship-it.html" style="margin-left: auto;">
+          <span class="nav-label">下一章</span>
+          <span class="nav-title">打包发布</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+</body>
+</html>

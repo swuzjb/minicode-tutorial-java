@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>06 - MCP 插件 | MiniCode (Java) 教程</title>
+  <link rel="stylesheet" href="../styles/main.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    <nav class="sidebar">
+      <a href="../index.html" class="sidebar-logo">
+        <span class="logo-mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/></svg></span>
+        MiniCode (Java)
+      </a>
+      <ul class="sidebar-nav">
+        <li><a href="01-hello-claude.html"><span class="chapter-num">01</span> Hello, Claude</a></li>
+        <li><a href="02-streaming-repl.html"><span class="chapter-num">02</span> 流式对话</a></li>
+        <li><a href="03-first-tool.html"><span class="chapter-num">03</span> 第一个工具</a></li>
+        <li><a href="04-tool-registry.html"><span class="chapter-num">04</span> 工具注册表</a></li>
+        <li><a href="05-security.html"><span class="chapter-num">05</span> 安全防护</a></li>
+        <li><a href="06-mcp.html" class="active"><span class="chapter-num">06</span> MCP 插件</a></li>
+        <li><a href="07-context.html"><span class="chapter-num">07</span> Context 管理</a></li>
+        <li><a href="08-ship-it.html"><span class="chapter-num">08</span> 打包发布</a></li>
+      </ul>
+    </nav>
+
+    <main class="main-content">
+      <header class="chapter-header">
+        <span class="chapter-number">Chapter 06</span>
+        <h1 class="chapter-title">MCP 插件</h1>
+        <p class="chapter-subtitle">工具写死在代码里。想接 GitHub API？改源码。想加数据库查询？改源码。MCP 解决这个问题。</p>
+      </header>
+
+      <p>到目前为止，MiniCode 的每一个工具都硬编码在 Java 源码中。想给它加一个"查 Jira 工单"的能力？你得写一个新的 Tool 实现类，重新编译，重新打包。这不是插件系统，这是改代码。</p>
+
+      <p>MCP（Model Context Protocol）解决了这个问题。它定义了一种标准协议，让 AI 宿主（我们的 MiniCode）可以与外部进程通信，动态发现和调用工具。就像 VS Code 的 Language Server Protocol，但面向 AI 工具调用。</p>
+
+      <h2>MCP 的本质</h2>
+
+      <p>MCP 本质上就是 <strong>JSON-RPC over stdin/stdout</strong>。宿主进程启动一个子进程，然后通过标准输入输出交换 JSON 消息。就这么简单。</p>
+
+      <p>一次完整的交互看起来像这样：</p>
+
+      <pre data-lang="json"><code><span class="token-comment">// Host → Server: 初始化</span>
+<span class="token-punctuation">{</span><span class="token-string">"jsonrpc"</span><span class="token-punctuation">:</span> <span class="token-string">"2.0"</span><span class="token-punctuation">,</span> <span class="token-string">"id"</span><span class="token-punctuation">:</span> <span class="token-number">1</span><span class="token-punctuation">,</span> <span class="token-string">"method"</span><span class="token-punctuation">:</span> <span class="token-string">"initialize"</span><span class="token-punctuation">,</span> <span class="token-string">"params"</span><span class="token-punctuation">:</span> <span class="token-punctuation">{</span><span class="token-punctuation">}</span><span class="token-punctuation">}</span>
+
+<span class="token-comment">// Host → Server: 发现工具</span>
+<span class="token-punctuation">{</span><span class="token-string">"jsonrpc"</span><span class="token-punctuation">:</span> <span class="token-string">"2.0"</span><span class="token-punctuation">,</span> <span class="token-string">"id"</span><span class="token-punctuation">:</span> <span class="token-number">2</span><span class="token-punctuation">,</span> <span class="token-string">"method"</span><span class="token-punctuation">:</span> <span class="token-string">"tools/list"</span><span class="token-punctuation">,</span> <span class="token-string">"params"</span><span class="token-punctuation">:</span> <span class="token-punctuation">{</span><span class="token-punctuation">}</span><span class="token-punctuation">}</span>
+
+<span class="token-comment">// Host → Server: 调用工具</span>
+<span class="token-punctuation">{</span><span class="token-string">"jsonrpc"</span><span class="token-punctuation">:</span> <span class="token-string">"2.0"</span><span class="token-punctuation">,</span> <span class="token-string">"id"</span><span class="token-punctuation">:</span> <span class="token-number">3</span><span class="token-punctuation">,</span> <span class="token-string">"method"</span><span class="token-punctuation">:</span> <span class="token-string">"tools/call"</span><span class="token-punctuation">,</span>
+ <span class="token-string">"params"</span><span class="token-punctuation">:</span> <span class="token-punctuation">{</span><span class="token-string">"name"</span><span class="token-punctuation">:</span> <span class="token-string">"hello"</span><span class="token-punctuation">,</span> <span class="token-string">"arguments"</span><span class="token-punctuation">:</span> <span class="token-punctuation">{</span><span class="token-string">"who"</span><span class="token-punctuation">:</span> <span class="token-string">"world"</span><span class="token-punctuation">}</span><span class="token-punctuation">}</span><span class="token-punctuation">}</span></code></pre>
+
+      <h2>架构图</h2>
+
+      <div class="diagram-container">
+        <svg width="580" height="140" viewBox="0 0 580 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="1" y="30" width="160" height="80" rx="8" fill="white" stroke="#b84c2a" stroke-width="2"/>
+          <text x="81" y="65" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="12" font-weight="600" fill="#1a1818">MiniCode</text>
+          <text x="81" y="85" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#6b6560">(Host / Java)</text>
+
+          <rect x="420" y="30" width="160" height="80" rx="8" fill="white" stroke="#3562a6" stroke-width="2"/>
+          <text x="500" y="65" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="12" font-weight="600" fill="#1a1818">MCP Server</text>
+          <text x="500" y="85" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#6b6560">(subprocess)</text>
+
+          <line x1="161" y1="60" x2="420" y2="60" stroke="#b84c2a" stroke-width="1.5" stroke-dasharray="6 3"/>
+          <polygon points="415,56 425,60 415,64" fill="#b84c2a"/>
+          <text x="290" y="52" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#6b6560">stdin (JSON-RPC request)</text>
+
+          <line x1="420" y1="82" x2="161" y2="82" stroke="#3562a6" stroke-width="1.5" stroke-dasharray="6 3"/>
+          <polygon points="166,78 156,82 166,86" fill="#3562a6"/>
+          <text x="290" y="100" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="9" fill="#6b6560">stdout (JSON-RPC response)</text>
+        </svg>
+        <p class="diagram-caption">MCP 通信模型：Host 通过 stdin/stdout 与子进程交换 JSON-RPC 消息</p>
+      </div>
+
+      <h2>Java MCP 客户端</h2>
+
+      <p>用 ProcessBuilder 启动子进程，用 Jackson 序列化/反序列化 JSON-RPC 消息：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public class</span> <span class="token-type">MCPClient</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">private final</span> <span class="token-type">Process</span> <span class="token-variable">process</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">private final</span> <span class="token-type">ObjectMapper</span> <span class="token-variable">mapper</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ObjectMapper</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">private</span> <span class="token-type">int</span> <span class="token-variable">requestId</span> <span class="token-operator">=</span> <span class="token-number">0</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">private final</span> <span class="token-type">BufferedReader</span> <span class="token-variable">reader</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">public</span> <span class="token-function">MCPClient</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">command</span><span class="token-punctuation">,</span> <span class="token-type">String</span><span class="token-punctuation">...</span> <span class="token-variable">args</span><span class="token-punctuation">)</span> <span class="token-keyword">throws</span> <span class="token-type">IOException</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">pb</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ProcessBuilder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">cmd</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;</span><span class="token-type">String</span><span class="token-operator">&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">cmd</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">command</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">cmd</span><span class="token-punctuation">.</span><span class="token-function">addAll</span><span class="token-punctuation">(</span><span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-variable">args</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">pb</span><span class="token-punctuation">.</span><span class="token-function">command</span><span class="token-punctuation">(</span><span class="token-variable">cmd</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">pb</span><span class="token-punctuation">.</span><span class="token-function">redirectErrorStream</span><span class="token-punctuation">(</span><span class="token-keyword">false</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">this</span><span class="token-punctuation">.</span><span class="token-variable">process</span> <span class="token-operator">=</span> <span class="token-variable">pb</span><span class="token-punctuation">.</span><span class="token-function">start</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">this</span><span class="token-punctuation">.</span><span class="token-variable">reader</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">BufferedReader</span><span class="token-punctuation">(</span>
+            <span class="token-keyword">new</span> <span class="token-type">InputStreamReader</span><span class="token-punctuation">(</span><span class="token-variable">process</span><span class="token-punctuation">.</span><span class="token-function">getInputStream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public</span> <span class="token-type">JsonNode</span> <span class="token-function">sendRequest</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">method</span><span class="token-punctuation">,</span> <span class="token-type">JsonNode</span> <span class="token-variable">params</span><span class="token-punctuation">)</span> <span class="token-keyword">throws</span> <span class="token-type">IOException</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">request</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"jsonrpc"</span><span class="token-punctuation">,</span> <span class="token-string">"2.0"</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"id"</span><span class="token-punctuation">,</span> <span class="token-operator">++</span><span class="token-variable">requestId</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"method"</span><span class="token-punctuation">,</span> <span class="token-variable">method</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">request</span><span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"params"</span><span class="token-punctuation">,</span> <span class="token-variable">params</span> <span class="token-operator">!=</span> <span class="token-keyword">null</span> <span class="token-operator">?</span> <span class="token-variable">params</span> <span class="token-operator">:</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">line</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">writeValueAsString</span><span class="token-punctuation">(</span><span class="token-variable">request</span><span class="token-punctuation">)</span> <span class="token-operator">+</span> <span class="token-string">"\n"</span><span class="token-punctuation">;</span>
+        <span class="token-variable">process</span><span class="token-punctuation">.</span><span class="token-function">getOutputStream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">write</span><span class="token-punctuation">(</span><span class="token-variable">line</span><span class="token-punctuation">.</span><span class="token-function">getBytes</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">process</span><span class="token-punctuation">.</span><span class="token-function">getOutputStream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">flush</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">responseLine</span> <span class="token-operator">=</span> <span class="token-variable">reader</span><span class="token-punctuation">.</span><span class="token-function">readLine</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">return</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">readTree</span><span class="token-punctuation">(</span><span class="token-variable">responseLine</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">ToolDefinition</span><span class="token-operator">&gt;</span> <span class="token-function">listTools</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-keyword">throws</span> <span class="token-type">IOException</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">response</span> <span class="token-operator">=</span> <span class="token-function">sendRequest</span><span class="token-punctuation">(</span><span class="token-string">"tools/list"</span><span class="token-punctuation">,</span> <span class="token-keyword">null</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">tools</span> <span class="token-operator">=</span> <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"result"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"tools"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">result</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;</span><span class="token-type">ToolDefinition</span><span class="token-operator">&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">t</span> <span class="token-punctuation">:</span> <span class="token-variable">tools</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-variable">result</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-keyword">new</span> <span class="token-type">ToolDefinition</span><span class="token-punctuation">(</span>
+                <span class="token-variable">t</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"name"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span>
+                <span class="token-variable">t</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"description"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span>
+                <span class="token-variable">t</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"inputSchema"</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+        <span class="token-keyword">return</span> <span class="token-variable">result</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">callTool</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-type">JsonNode</span> <span class="token-variable">args</span><span class="token-punctuation">)</span> <span class="token-keyword">throws</span> <span class="token-type">IOException</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">params</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"name"</span><span class="token-punctuation">,</span> <span class="token-variable">name</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">params</span><span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"arguments"</span><span class="token-punctuation">,</span> <span class="token-variable">args</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">response</span> <span class="token-operator">=</span> <span class="token-function">sendRequest</span><span class="token-punctuation">(</span><span class="token-string">"tools/call"</span><span class="token-punctuation">,</span> <span class="token-variable">params</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">content</span> <span class="token-operator">=</span> <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"result"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"content"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-number">0</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">return</span> <span class="token-variable">content</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"text"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public void</span> <span class="token-function">close</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">process</span><span class="token-punctuation">.</span><span class="token-function">destroyForcibly</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>这就是一个完整的 MCP 客户端了。100 行 Java 代码。ProcessBuilder 负责进程管理，Jackson 负责序列化，BufferedReader 按行读取响应。</p>
+
+      <h2>从配置文件加载</h2>
+
+      <p>MCP 服务器的配置放在项目根目录的 <code>.minicode/mcp.json</code>：</p>
+
+      <pre data-lang="json"><code><span class="token-punctuation">{</span>
+  <span class="token-string">"servers"</span><span class="token-punctuation">:</span> <span class="token-punctuation">{</span>
+    <span class="token-string">"github"</span><span class="token-punctuation">:</span> <span class="token-punctuation">{</span>
+      <span class="token-string">"command"</span><span class="token-punctuation">:</span> <span class="token-string">"npx"</span><span class="token-punctuation">,</span>
+      <span class="token-string">"args"</span><span class="token-punctuation">:</span> <span class="token-punctuation">[</span><span class="token-string">"@modelcontextprotocol/server-github"</span><span class="token-punctuation">]</span>
+    <span class="token-punctuation">}</span><span class="token-punctuation">,</span>
+    <span class="token-string">"hello"</span><span class="token-punctuation">:</span> <span class="token-punctuation">{</span>
+      <span class="token-string">"command"</span><span class="token-punctuation">:</span> <span class="token-string">"java"</span><span class="token-punctuation">,</span>
+      <span class="token-string">"args"</span><span class="token-punctuation">:</span> <span class="token-punctuation">[</span><span class="token-string">"-jar"</span><span class="token-punctuation">,</span> <span class="token-string">"hello-server.jar"</span><span class="token-punctuation">]</span>
+    <span class="token-punctuation">}</span>
+  <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>启动时读取配置，启动所有 MCP 服务器，把它们的工具注册到 ToolRegistry：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">MCPClient</span><span class="token-operator">&gt;</span> <span class="token-function">loadMCPServers</span><span class="token-punctuation">(</span><span class="token-type">ToolRegistry</span> <span class="token-variable">registry</span><span class="token-punctuation">)</span> <span class="token-keyword">throws</span> <span class="token-type">IOException</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">var</span> <span class="token-variable">configFile</span> <span class="token-operator">=</span> <span class="token-type">Path</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-string">".minicode/mcp.json"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-operator">!</span><span class="token-type">Files</span><span class="token-punctuation">.</span><span class="token-function">exists</span><span class="token-punctuation">(</span><span class="token-variable">configFile</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">var</span> <span class="token-variable">mapper</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ObjectMapper</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">var</span> <span class="token-variable">config</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">readTree</span><span class="token-punctuation">(</span><span class="token-variable">configFile</span><span class="token-punctuation">.</span><span class="token-function">toFile</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">var</span> <span class="token-variable">servers</span> <span class="token-operator">=</span> <span class="token-variable">config</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"servers"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">var</span> <span class="token-variable">clients</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;</span><span class="token-type">MCPClient</span><span class="token-operator">&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">var</span> <span class="token-variable">fields</span> <span class="token-operator">=</span> <span class="token-variable">servers</span><span class="token-punctuation">.</span><span class="token-function">fields</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">while</span> <span class="token-punctuation">(</span><span class="token-variable">fields</span><span class="token-punctuation">.</span><span class="token-function">hasNext</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">entry</span> <span class="token-operator">=</span> <span class="token-variable">fields</span><span class="token-punctuation">.</span><span class="token-function">next</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">serverConfig</span> <span class="token-operator">=</span> <span class="token-variable">entry</span><span class="token-punctuation">.</span><span class="token-function">getValue</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">command</span> <span class="token-operator">=</span> <span class="token-variable">serverConfig</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"command"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">argsNode</span> <span class="token-operator">=</span> <span class="token-variable">serverConfig</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"args"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">argsList</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-variable">argsNode</span><span class="token-punctuation">.</span><span class="token-function">size</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">]</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-type">int</span> <span class="token-variable">i</span> <span class="token-operator">=</span> <span class="token-number">0</span><span class="token-punctuation">;</span> <span class="token-variable">i</span> <span class="token-operator">&lt;</span> <span class="token-variable">argsNode</span><span class="token-punctuation">.</span><span class="token-function">size</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span> <span class="token-variable">i</span><span class="token-operator">++</span><span class="token-punctuation">)</span>
+            <span class="token-variable">argsList</span><span class="token-punctuation">[</span><span class="token-variable">i</span><span class="token-punctuation">]</span> <span class="token-operator">=</span> <span class="token-variable">argsNode</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-variable">i</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">client</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">MCPClient</span><span class="token-punctuation">(</span><span class="token-variable">command</span><span class="token-punctuation">,</span> <span class="token-variable">argsList</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-variable">client</span><span class="token-punctuation">.</span><span class="token-function">sendRequest</span><span class="token-punctuation">(</span><span class="token-string">"initialize"</span><span class="token-punctuation">,</span> <span class="token-keyword">null</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span> <span class="token-comment">// 握手</span>
+
+        <span class="token-comment">// 发现工具并注册</span>
+        <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">tool</span> <span class="token-punctuation">:</span> <span class="token-variable">client</span><span class="token-punctuation">.</span><span class="token-function">listTools</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-variable">registry</span><span class="token-punctuation">.</span><span class="token-function">registerMCP</span><span class="token-punctuation">(</span><span class="token-variable">tool</span><span class="token-punctuation">,</span> <span class="token-variable">client</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+        <span class="token-variable">clients</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">client</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"  [mcp] Loaded: "</span> <span class="token-operator">+</span> <span class="token-variable">entry</span><span class="token-punctuation">.</span><span class="token-function">getKey</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+    <span class="token-keyword">return</span> <span class="token-variable">clients</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h2>写一个最小 MCP Server</h2>
+
+      <p>为了验证客户端能正常工作，我们用 Java 写一个最简单的 MCP 服务器——它只有一个 "hello" 工具：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public class</span> <span class="token-type">HelloServer</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">public static void</span> <span class="token-function">main</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">)</span> <span class="token-keyword">throws</span> <span class="token-type">Exception</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">mapper</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ObjectMapper</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">var</span> <span class="token-variable">reader</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">BufferedReader</span><span class="token-punctuation">(</span><span class="token-keyword">new</span> <span class="token-type">InputStreamReader</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">in</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-type">String</span> <span class="token-variable">line</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">while</span> <span class="token-punctuation">(</span><span class="token-punctuation">(</span><span class="token-variable">line</span> <span class="token-operator">=</span> <span class="token-variable">reader</span><span class="token-punctuation">.</span><span class="token-function">readLine</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-operator">!=</span> <span class="token-keyword">null</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">var</span> <span class="token-variable">request</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">readTree</span><span class="token-punctuation">(</span><span class="token-variable">line</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">var</span> <span class="token-variable">method</span> <span class="token-operator">=</span> <span class="token-variable">request</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"method"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">var</span> <span class="token-variable">id</span> <span class="token-operator">=</span> <span class="token-variable">request</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"id"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-type">JsonNode</span> <span class="token-variable">result</span> <span class="token-operator">=</span> <span class="token-keyword">switch</span> <span class="token-punctuation">(</span><span class="token-variable">method</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-keyword">case</span> <span class="token-string">"initialize"</span> <span class="token-operator">-&gt;</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"serverInfo"</span><span class="token-punctuation">,</span>
+                        <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"name"</span><span class="token-punctuation">,</span> <span class="token-string">"hello-server"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+                <span class="token-keyword">case</span> <span class="token-string">"tools/list"</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">{</span>
+                    <span class="token-keyword">var</span> <span class="token-variable">tool</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                        <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"name"</span><span class="token-punctuation">,</span> <span class="token-string">"hello"</span><span class="token-punctuation">)</span>
+                        <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"description"</span><span class="token-punctuation">,</span> <span class="token-string">"Say hello to someone"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-keyword">var</span> <span class="token-variable">schema</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                        <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"type"</span><span class="token-punctuation">,</span> <span class="token-string">"object"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-variable">schema</span><span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"properties"</span><span class="token-punctuation">,</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                        <span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"who"</span><span class="token-punctuation">,</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                            <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"type"</span><span class="token-punctuation">,</span> <span class="token-string">"string"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-variable">tool</span><span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"inputSchema"</span><span class="token-punctuation">,</span> <span class="token-variable">schema</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-keyword">var</span> <span class="token-variable">res</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-variable">res</span><span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"tools"</span><span class="token-punctuation">,</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createArrayNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">tool</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-keyword">yield</span> <span class="token-variable">res</span><span class="token-punctuation">;</span>
+                <span class="token-punctuation">}</span>
+
+                <span class="token-keyword">case</span> <span class="token-string">"tools/call"</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">{</span>
+                    <span class="token-keyword">var</span> <span class="token-variable">who</span> <span class="token-operator">=</span> <span class="token-variable">request</span><span class="token-punctuation">.</span><span class="token-function">at</span><span class="token-punctuation">(</span><span class="token-string">"/params/arguments/who"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-string">"world"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-keyword">var</span> <span class="token-variable">text</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                        <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"type"</span><span class="token-punctuation">,</span> <span class="token-string">"text"</span><span class="token-punctuation">)</span>
+                        <span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"text"</span><span class="token-punctuation">,</span> <span class="token-string">"Hello, "</span> <span class="token-operator">+</span> <span class="token-variable">who</span> <span class="token-operator">+</span> <span class="token-string">"!"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-keyword">var</span> <span class="token-variable">res</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-variable">res</span><span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"content"</span><span class="token-punctuation">,</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createArrayNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">text</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                    <span class="token-keyword">yield</span> <span class="token-variable">res</span><span class="token-punctuation">;</span>
+                <span class="token-punctuation">}</span>
+
+                <span class="token-keyword">default</span> <span class="token-operator">-&gt;</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span><span class="token-punctuation">;</span>
+
+            <span class="token-keyword">var</span> <span class="token-variable">response</span> <span class="token-operator">=</span> <span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">createObjectNode</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">put</span><span class="token-punctuation">(</span><span class="token-string">"jsonrpc"</span><span class="token-punctuation">,</span> <span class="token-string">"2.0"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"id"</span><span class="token-punctuation">,</span> <span class="token-variable">id</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">set</span><span class="token-punctuation">(</span><span class="token-string">"result"</span><span class="token-punctuation">,</span> <span class="token-variable">result</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-variable">mapper</span><span class="token-punctuation">.</span><span class="token-function">writeValueAsString</span><span class="token-punctuation">(</span><span class="token-variable">response</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">flush</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>注意 Java 21 的 switch 表达式和 <code>yield</code> 关键字。这让消息分发逻辑清晰得多。</p>
+
+      <h2>进程生命周期管理</h2>
+
+      <p>MCP 服务器是子进程。如果 MiniCode 崩溃，这些子进程可能变成僵尸进程。用 shutdown hook 来保证清理：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static final</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">MCPClient</span><span class="token-operator">&gt;</span> <span class="token-variable">mcpClients</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+<span class="token-comment">// 在 main() 中注册 shutdown hook</span>
+<span class="token-type">Runtime</span><span class="token-punctuation">.</span><span class="token-function">getRuntime</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">addShutdownHook</span><span class="token-punctuation">(</span><span class="token-keyword">new</span> <span class="token-type">Thread</span><span class="token-punctuation">(</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">{</span>
+    <span class="token-variable">mcpClients</span><span class="token-punctuation">.</span><span class="token-function">forEach</span><span class="token-punctuation">(</span><span class="token-type">MCPClient</span><span class="token-operator">::</span><span class="token-variable">close</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">err</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"[mcp] All servers shut down."</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span></code></pre>
+
+      <div class="info-box note">
+        <div class="info-box-title">为什么用 ProcessBuilder 而不是 SDK？</div>
+        <p>截至目前，Java 的 MCP SDK 还在早期阶段。直接用 ProcessBuilder + Jackson 实现 JSON-RPC 反而更简单、更透明。你完全理解每一行代码在做什么。等 SDK 成熟后再迁移也不迟——协议是标准的，换客户端实现不影响 MCP 服务器。</p>
+      </div>
+
+      <h2>终端效果</h2>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">$ </span><span class="command">java -jar minicode.jar</span><br>
+          <span class="output">  [mcp] Loaded: github (3 tools)</span><br>
+          <span class="output">  [mcp] Loaded: hello (1 tool)</span><br>
+          <span class="output">  MiniCode ready. 6 tools available.</span><br><br>
+          <span class="prompt">you: </span><span class="command">用 hello 工具跟 Java 打个招呼</span><br><br>
+          <span class="output">  [hello] calling: hello({"who": "Java"})</span><br>
+          <span class="highlight">  Hello, Java!</span><br><br>
+          <span class="prompt">you: </span><span class="command">查一下 minicode 仓库的 open issues</span><br><br>
+          <span class="output">  [github] calling: list_issues({"repo": "minicode", "state": "open"})</span><br>
+          <span class="highlight">  Found 3 open issues...</span>
+        </div>
+      </div>
+
+      <div class="info-box tip">
+        <div class="info-box-title">本章成果</div>
+        <p>MiniCode 现在是可扩展的。任何人都可以写一个 MCP 服务器（用任何语言），通过配置文件接入。不用改 MiniCode 源码，不用重新编译。这就是插件系统的力量。下一章我们处理一个实际问题：对话太长，context 爆了。</p>
+      </div>
+
+      <nav class="chapter-nav">
+        <a href="05-security.html">
+          <span class="nav-label">上一章</span>
+          <span class="nav-title">安全防护</span>
+        </a>
+        <a href="07-context.html" style="margin-left: auto;">
+          <span class="nav-label">下一章</span>
+          <span class="nav-title">Context 管理</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+</body>
+</html>

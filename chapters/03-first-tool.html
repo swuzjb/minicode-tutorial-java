@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>03 - 第一个工具 | MiniCode (Java) 教程</title>
+  <link rel="stylesheet" href="../styles/main.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    <nav class="sidebar">
+      <a href="../index.html" class="sidebar-logo">
+        <span class="logo-mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/></svg></span>
+        MiniCode (Java)
+      </a>
+      <ul class="sidebar-nav">
+        <li><a href="01-hello-claude.html"><span class="chapter-num">01</span> Hello, Claude</a></li>
+        <li><a href="02-streaming-repl.html"><span class="chapter-num">02</span> 流式对话</a></li>
+        <li><a href="03-first-tool.html" class="active"><span class="chapter-num">03</span> 第一个工具</a></li>
+        <li><a href="04-tool-registry.html"><span class="chapter-num">04</span> 工具注册表</a></li>
+        <li><a href="05-security.html"><span class="chapter-num">05</span> 安全防护</a></li>
+        <li><a href="06-mcp.html"><span class="chapter-num">06</span> MCP 插件</a></li>
+        <li><a href="07-context.html"><span class="chapter-num">07</span> Context 管理</a></li>
+        <li><a href="08-ship-it.html"><span class="chapter-num">08</span> 打包发布</a></li>
+      </ul>
+    </nav>
+
+    <main class="main-content">
+      <header class="chapter-header">
+        <span class="chapter-number">Chapter 03</span>
+        <h1 class="chapter-title">第一个工具</h1>
+        <p class="chapter-subtitle">实现完整的 Tool Use 循环，让 Claude 能读取你的文件</p>
+      </header>
+
+      <p>到目前为止 Claude 只能说话。但 Claude Code 能读文件、执行命令——因为 API 支持 tool use。这一章我们实现完整的工具调用循环：Claude 决定要读一个文件 &rarr; 我们执行读取 &rarr; 把结果喂回去 &rarr; Claude 基于文件内容回答。</p>
+
+      <h2>Tool Use 循环</h2>
+
+      <p>先看全貌。整个流程是一个循环：</p>
+
+      <div class="diagram-container">
+        <svg width="620" height="280" viewBox="0 0 620 280" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="620" height="280" rx="12" fill="#faf9f7"/>
+          <rect width="620" height="280" rx="12" stroke="#d4cfc8" stroke-width="1"/>
+
+          <rect x="30" y="40" width="130" height="50" rx="6" fill="#ffffff" stroke="#d4cfc8"/>
+          <text x="95" y="60" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#6b6560">1</text>
+          <text x="95" y="76" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="12" fill="#1a1818">用户发消息</text>
+
+          <path d="M160 65 L200 65" stroke="#b84c2a" stroke-width="1.5" marker-end="url(#arr03)"/>
+
+          <rect x="210" y="40" width="160" height="50" rx="6" fill="#ffffff" stroke="#d4cfc8"/>
+          <text x="290" y="60" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#6b6560">2</text>
+          <text x="290" y="76" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="12" fill="#1a1818">调用 API（附带工具定义）</text>
+
+          <path d="M370 65 L410 65" stroke="#b84c2a" stroke-width="1.5" marker-end="url(#arr03)"/>
+
+          <rect x="420" y="40" width="170" height="50" rx="6" fill="#fef3ef" stroke="#b84c2a"/>
+          <text x="505" y="60" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#6b6560">3</text>
+          <text x="505" y="76" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="12" fill="#1a1818">响应含 tool_use 块</text>
+
+          <path d="M505 90 L505 130" stroke="#b84c2a" stroke-width="1.5" marker-end="url(#arr03)"/>
+
+          <rect x="420" y="140" width="170" height="50" rx="6" fill="#ffffff" stroke="#d4cfc8"/>
+          <text x="505" y="160" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#6b6560">4</text>
+          <text x="505" y="176" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="12" fill="#1a1818">我们执行工具</text>
+
+          <path d="M420 165 L370 165" stroke="#b84c2a" stroke-width="1.5" marker-end="url(#arr03)"/>
+
+          <rect x="210" y="140" width="160" height="50" rx="6" fill="#ffffff" stroke="#d4cfc8"/>
+          <text x="290" y="160" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#6b6560">5</text>
+          <text x="290" y="176" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="12" fill="#1a1818">发回 tool_result</text>
+
+          <path d="M210 165 L160 165" stroke="#b84c2a" stroke-width="1.5" marker-end="url(#arr03)"/>
+
+          <rect x="30" y="140" width="130" height="50" rx="6" fill="#f0faf5" stroke="#2a7d5f"/>
+          <text x="95" y="160" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#6b6560">6</text>
+          <text x="95" y="176" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="12" fill="#1a1818">文本回复</text>
+
+          <path d="M290 190 L290 230 L505 230 L505 90" stroke="#6b6560" stroke-width="1" stroke-dasharray="4 3" marker-end="url(#arr03g)"/>
+          <text x="400" y="248" text-anchor="middle" font-family="-apple-system, sans-serif" font-size="11" fill="#6b6560">如果还需要调用工具，回到步骤 3</text>
+
+          <defs>
+            <marker id="arr03" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#b84c2a"/>
+            </marker>
+            <marker id="arr03g" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="#6b6560"/>
+            </marker>
+          </defs>
+        </svg>
+        <p class="diagram-caption">Tool Use 循环：Claude 可以多次调用工具，直到它认为已经收集够信息来回答</p>
+      </div>
+
+      <h2>定义工具</h2>
+
+      <p>工具定义就是一个 JSON Schema，告诉 Claude 这个工具叫什么、做什么、接受什么参数。在 Java SDK 中，我们用 Builder 模式构建：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">import</span> <span class="token-variable">com.anthropic.core.JsonValue</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.models.messages.Tool</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.util.List</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.util.Map</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">var</span> <span class="token-variable">readFileTool</span> <span class="token-operator">=</span> <span class="token-type">Tool</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+    <span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-string">"read_file"</span><span class="token-punctuation">)</span>
+    <span class="token-punctuation">.</span><span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-string">"Read the contents of a file at the given path. Returns the file content as text."</span><span class="token-punctuation">)</span>
+    <span class="token-punctuation">.</span><span class="token-function">inputSchema</span><span class="token-punctuation">(</span><span class="token-type">Tool.InputSchema</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">putAdditionalProperty</span><span class="token-punctuation">(</span><span class="token-string">"type"</span><span class="token-punctuation">,</span> <span class="token-type">JsonValue</span><span class="token-punctuation">.</span><span class="token-function">from</span><span class="token-punctuation">(</span><span class="token-string">"object"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">putAdditionalProperty</span><span class="token-punctuation">(</span><span class="token-string">"properties"</span><span class="token-punctuation">,</span> <span class="token-type">JsonValue</span><span class="token-punctuation">.</span><span class="token-function">from</span><span class="token-punctuation">(</span><span class="token-type">Map</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span>
+            <span class="token-string">"path"</span><span class="token-punctuation">,</span> <span class="token-type">Map</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span>
+                <span class="token-string">"type"</span><span class="token-punctuation">,</span> <span class="token-string">"string"</span><span class="token-punctuation">,</span>
+                <span class="token-string">"description"</span><span class="token-punctuation">,</span> <span class="token-string">"The path to the file to read"</span>
+            <span class="token-punctuation">)</span>
+        <span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">putAdditionalProperty</span><span class="token-punctuation">(</span><span class="token-string">"required"</span><span class="token-punctuation">,</span> <span class="token-type">JsonValue</span><span class="token-punctuation">.</span><span class="token-function">from</span><span class="token-punctuation">(</span><span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-string">"path"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+    <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span></code></pre>
+
+      <p>Claude 不会直接执行这个工具——它只是<strong>看到</strong>这个定义，然后在需要时<strong>请求</strong>调用。真正的执行在我们的代码里。</p>
+
+      <h2>执行工具</h2>
+
+      <p>一个简单的方法，根据工具名执行对应操作。我们用 Jackson 的 <code>JsonNode</code> 来解析工具输入：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">import</span> <span class="token-variable">com.fasterxml.jackson.databind.JsonNode</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.io.IOException</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.nio.file.Files</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.nio.file.Path</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">private</span> <span class="token-keyword">static</span> <span class="token-type">String</span> <span class="token-function">executeTool</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-type">JsonNode</span> <span class="token-variable">input</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"read_file"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">try</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">var</span> <span class="token-variable">path</span> <span class="token-operator">=</span> <span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"path"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">return</span> <span class="token-type">Files</span><span class="token-punctuation">.</span><span class="token-function">readString</span><span class="token-punctuation">(</span><span class="token-type">Path</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-variable">path</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span> <span class="token-keyword">catch</span> <span class="token-punctuation">(</span><span class="token-type">IOException</span> <span class="token-variable">e</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">return</span> <span class="token-string">"Error: "</span> <span class="token-operator">+</span> <span class="token-variable">e</span><span class="token-punctuation">.</span><span class="token-function">getMessage</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+    <span class="token-keyword">return</span> <span class="token-string">"Error: Unknown tool \""</span> <span class="token-operator">+</span> <span class="token-variable">name</span> <span class="token-operator">+</span> <span class="token-string">"\""</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h2>Agent Loop</h2>
+
+      <p>这是整章的核心——也是 AI Agent 的核心。一个 <code>while(true)</code> 循环，不断让 Claude 调用工具直到它决定停止：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private</span> <span class="token-keyword">static</span> <span class="token-keyword">void</span> <span class="token-function">agentLoop</span><span class="token-punctuation">(</span><span class="token-type">AnthropicClient</span> <span class="token-variable">client</span><span class="token-punctuation">,</span> <span class="token-type">String</span> <span class="token-variable">userMessage</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofUser</span><span class="token-punctuation">(</span><span class="token-variable">userMessage</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">while</span> <span class="token-punctuation">(</span><span class="token-keyword">true</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">response</span> <span class="token-operator">=</span> <span class="token-variable">client</span><span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">create</span><span class="token-punctuation">(</span>
+            <span class="token-type">MessageCreateParams</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">model</span><span class="token-punctuation">(</span><span class="token-string">"claude-sonnet-4-20250514"</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">maxTokens</span><span class="token-punctuation">(</span><span class="token-number">4096</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">tools</span><span class="token-punctuation">(</span><span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-variable">readFileTool</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-variable">messages</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-comment">// 把 assistant 的完整回复加入历史</span>
+        <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofAssistant</span><span class="token-punctuation">(</span><span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-comment">// 收集 tool_use 块</span>
+        <span class="token-keyword">var</span> <span class="token-variable">toolUseBlocks</span> <span class="token-operator">=</span> <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">stream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">filter</span><span class="token-punctuation">(</span><span class="token-variable">b</span> <span class="token-operator">-&gt;</span> <span class="token-variable">b</span> <span class="token-keyword">instanceof</span> <span class="token-type">ContentBlock.ToolUse</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">map</span><span class="token-punctuation">(</span><span class="token-variable">b</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">(</span><span class="token-type">ContentBlock.ToolUse</span><span class="token-punctuation">)</span> <span class="token-variable">b</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">toList</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-comment">// 如果没有工具调用，输出文本并结束</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">toolUseBlocks</span><span class="token-punctuation">.</span><span class="token-function">isEmpty</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">stream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">filter</span><span class="token-punctuation">(</span><span class="token-variable">b</span> <span class="token-operator">-&gt;</span> <span class="token-variable">b</span> <span class="token-keyword">instanceof</span> <span class="token-type">ContentBlock.Text</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">map</span><span class="token-punctuation">(</span><span class="token-variable">b</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">(</span><span class="token-type">ContentBlock.Text</span><span class="token-punctuation">)</span> <span class="token-variable">b</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">forEach</span><span class="token-punctuation">(</span><span class="token-variable">t</span> <span class="token-operator">-&gt;</span> <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-variable">t</span><span class="token-punctuation">.</span><span class="token-function">text</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">break</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+
+        <span class="token-comment">// 执行每个工具调用，收集结果</span>
+        <span class="token-keyword">var</span> <span class="token-variable">toolResults</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;</span><span class="token-type">ContentBlockParam</span><span class="token-operator">&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">toolUse</span> <span class="token-punctuation">:</span> <span class="token-variable">toolUseBlocks</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"  [tool] "</span> <span class="token-operator">+</span> <span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">+</span> <span class="token-string">"("</span> <span class="token-operator">+</span> <span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">input</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">+</span> <span class="token-string">")"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">var</span> <span class="token-variable">result</span> <span class="token-operator">=</span> <span class="token-function">executeTool</span><span class="token-punctuation">(</span><span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span> <span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">input</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-variable">toolResults</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">ContentBlockParam</span><span class="token-punctuation">.</span><span class="token-function">ofToolResult</span><span class="token-punctuation">(</span>
+                <span class="token-type">ToolResultBlockParam</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">toolUseId</span><span class="token-punctuation">(</span><span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">id</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-variable">result</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+
+        <span class="token-comment">// 把工具结果作为 user 消息发回</span>
+        <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofUser</span><span class="token-punctuation">(</span><span class="token-variable">toolResults</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-comment">// 继续循环 - Claude 会看到工具结果并决定下一步</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h2>关键点解释</h2>
+
+      <div class="info-box note">
+        <div class="info-box-title">为什么工具结果放在 user 角色？</div>
+        <p>Anthropic API 的消息格式要求 <code>user</code> / <code>assistant</code> 严格交替。<code>tool_result</code> 是对 <code>tool_use</code> 的回复，逻辑上属于"我们给 Claude 的输入"，所以放在 <code>user</code> 侧。在 Java SDK 中用 <code>MessageParam.ofUser(toolResults)</code> 来构建。</p>
+      </div>
+
+      <div class="info-box note">
+        <div class="info-box-title">while(true) 为什么安全？</div>
+        <p>因为如果 Claude 的响应里没有 <code>ContentBlock.ToolUse</code> 块，循环就 <code>break</code> 了。这就是 Agent Loop 的核心逻辑：<strong>循环直到 AI 决定停止调用工具</strong>。你也可以检查 <code>response.stopReason()</code>——它是 <code>StopReason.TOOL_USE</code> 时表示 Claude 还想继续，是 <code>StopReason.END_TURN</code> 时表示它说完了。</p>
+      </div>
+
+      <h2>完整程序</h2>
+
+      <p>把 REPL + Agent Loop + read_file 组装成完整的 <code>Main.java</code>：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">package</span> <span class="token-variable">com.minicode</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.client.AnthropicClient</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.core.JsonValue</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.models.messages.*</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">com.fasterxml.jackson.databind.JsonNode</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">import</span> <span class="token-variable">java.io.IOException</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.nio.file.Files</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.nio.file.Path</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">java.util.*</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">public</span> <span class="token-keyword">class</span> <span class="token-type">Main</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">private</span> <span class="token-keyword">static</span> <span class="token-keyword">final</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">MessageParam</span><span class="token-operator">&gt;</span> <span class="token-variable">messages</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">private</span> <span class="token-keyword">static</span> <span class="token-keyword">final</span> <span class="token-type">Tool</span> <span class="token-variable">readFileTool</span> <span class="token-operator">=</span> <span class="token-type">Tool</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-string">"read_file"</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">description</span><span class="token-punctuation">(</span><span class="token-string">"Read the contents of a file at the given path"</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">inputSchema</span><span class="token-punctuation">(</span><span class="token-type">Tool.InputSchema</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">putAdditionalProperty</span><span class="token-punctuation">(</span><span class="token-string">"type"</span><span class="token-punctuation">,</span> <span class="token-type">JsonValue</span><span class="token-punctuation">.</span><span class="token-function">from</span><span class="token-punctuation">(</span><span class="token-string">"object"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">putAdditionalProperty</span><span class="token-punctuation">(</span><span class="token-string">"properties"</span><span class="token-punctuation">,</span> <span class="token-type">JsonValue</span><span class="token-punctuation">.</span><span class="token-function">from</span><span class="token-punctuation">(</span><span class="token-type">Map</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span>
+                <span class="token-string">"path"</span><span class="token-punctuation">,</span> <span class="token-type">Map</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-string">"type"</span><span class="token-punctuation">,</span> <span class="token-string">"string"</span><span class="token-punctuation">,</span> <span class="token-string">"description"</span><span class="token-punctuation">,</span> <span class="token-string">"File path to read"</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">putAdditionalProperty</span><span class="token-punctuation">(</span><span class="token-string">"required"</span><span class="token-punctuation">,</span> <span class="token-type">JsonValue</span><span class="token-punctuation">.</span><span class="token-function">from</span><span class="token-punctuation">(</span><span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-string">"path"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">private</span> <span class="token-keyword">static</span> <span class="token-type">String</span> <span class="token-function">executeTool</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-type">JsonNode</span> <span class="token-variable">input</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"read_file"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">try</span> <span class="token-punctuation">{</span>
+                <span class="token-keyword">return</span> <span class="token-type">Files</span><span class="token-punctuation">.</span><span class="token-function">readString</span><span class="token-punctuation">(</span><span class="token-type">Path</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"path"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span> <span class="token-keyword">catch</span> <span class="token-punctuation">(</span><span class="token-type">IOException</span> <span class="token-variable">e</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-keyword">return</span> <span class="token-string">"Error: "</span> <span class="token-operator">+</span> <span class="token-variable">e</span><span class="token-punctuation">.</span><span class="token-function">getMessage</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span>
+        <span class="token-punctuation">}</span>
+        <span class="token-keyword">return</span> <span class="token-string">"Error: Unknown tool \""</span> <span class="token-operator">+</span> <span class="token-variable">name</span> <span class="token-operator">+</span> <span class="token-string">"\""</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">private</span> <span class="token-keyword">static</span> <span class="token-keyword">void</span> <span class="token-function">agentLoop</span><span class="token-punctuation">(</span><span class="token-type">AnthropicClient</span> <span class="token-variable">client</span><span class="token-punctuation">,</span> <span class="token-type">String</span> <span class="token-variable">userMessage</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofUser</span><span class="token-punctuation">(</span><span class="token-variable">userMessage</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">while</span> <span class="token-punctuation">(</span><span class="token-keyword">true</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">var</span> <span class="token-variable">response</span> <span class="token-operator">=</span> <span class="token-variable">client</span><span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">create</span><span class="token-punctuation">(</span>
+                <span class="token-type">MessageCreateParams</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">model</span><span class="token-punctuation">(</span><span class="token-string">"claude-sonnet-4-20250514"</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">maxTokens</span><span class="token-punctuation">(</span><span class="token-number">4096</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">tools</span><span class="token-punctuation">(</span><span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span><span class="token-variable">readFileTool</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-variable">messages</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofAssistant</span><span class="token-punctuation">(</span><span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-keyword">var</span> <span class="token-variable">toolUseBlocks</span> <span class="token-operator">=</span> <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">stream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">filter</span><span class="token-punctuation">(</span><span class="token-variable">b</span> <span class="token-operator">-&gt;</span> <span class="token-variable">b</span> <span class="token-keyword">instanceof</span> <span class="token-type">ContentBlock.ToolUse</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">map</span><span class="token-punctuation">(</span><span class="token-variable">b</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">(</span><span class="token-type">ContentBlock.ToolUse</span><span class="token-punctuation">)</span> <span class="token-variable">b</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">toList</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+            <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">toolUseBlocks</span><span class="token-punctuation">.</span><span class="token-function">isEmpty</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-variable">response</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">stream</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">filter</span><span class="token-punctuation">(</span><span class="token-variable">b</span> <span class="token-operator">-&gt;</span> <span class="token-variable">b</span> <span class="token-keyword">instanceof</span> <span class="token-type">ContentBlock.Text</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">map</span><span class="token-punctuation">(</span><span class="token-variable">b</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">(</span><span class="token-type">ContentBlock.Text</span><span class="token-punctuation">)</span> <span class="token-variable">b</span><span class="token-punctuation">)</span>
+                    <span class="token-punctuation">.</span><span class="token-function">forEach</span><span class="token-punctuation">(</span><span class="token-variable">t</span> <span class="token-operator">-&gt;</span> <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-variable">t</span><span class="token-punctuation">.</span><span class="token-function">text</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                <span class="token-keyword">break</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span>
+
+            <span class="token-keyword">var</span> <span class="token-variable">toolResults</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">ArrayList</span><span class="token-operator">&lt;</span><span class="token-type">ContentBlockParam</span><span class="token-operator">&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">toolUse</span> <span class="token-punctuation">:</span> <span class="token-variable">toolUseBlocks</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"  [tool] "</span> <span class="token-operator">+</span> <span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">+</span> <span class="token-string">"("</span> <span class="token-operator">+</span> <span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">input</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">+</span> <span class="token-string">")"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                <span class="token-keyword">var</span> <span class="token-variable">result</span> <span class="token-operator">=</span> <span class="token-function">executeTool</span><span class="token-punctuation">(</span><span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">name</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span> <span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">input</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+                <span class="token-variable">toolResults</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">ContentBlockParam</span><span class="token-punctuation">.</span><span class="token-function">ofToolResult</span><span class="token-punctuation">(</span>
+                    <span class="token-type">ToolResultBlockParam</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                        <span class="token-punctuation">.</span><span class="token-function">toolUseId</span><span class="token-punctuation">(</span><span class="token-variable">toolUse</span><span class="token-punctuation">.</span><span class="token-function">id</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+                        <span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-variable">result</span><span class="token-punctuation">)</span>
+                        <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span>
+
+            <span class="token-variable">messages</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-type">MessageParam</span><span class="token-punctuation">.</span><span class="token-function">ofUser</span><span class="token-punctuation">(</span><span class="token-variable">toolResults</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">public</span> <span class="token-keyword">static</span> <span class="token-keyword">void</span> <span class="token-function">main</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">client</span> <span class="token-operator">=</span> <span class="token-type">AnthropicClient</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">apiKey</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-function">getenv</span><span class="token-punctuation">(</span><span class="token-string">"ANTHROPIC_API_KEY"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">scanner</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">Scanner</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">in</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"MiniCode v0.2 (type \"exit\" to quit)\n"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">while</span> <span class="token-punctuation">(</span><span class="token-keyword">true</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-string">"you&gt; "</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">var</span> <span class="token-variable">input</span> <span class="token-operator">=</span> <span class="token-variable">scanner</span><span class="token-punctuation">.</span><span class="token-function">nextLine</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">trim</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"exit"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">break</span><span class="token-punctuation">;</span>
+            <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">isEmpty</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">continue</span><span class="token-punctuation">;</span>
+            <span class="token-function">agentLoop</span><span class="token-punctuation">(</span><span class="token-variable">client</span><span class="token-punctuation">,</span> <span class="token-variable">input</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h2>运行验证</h2>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">$ </span><span class="command">mvn compile exec:java -Dexec.mainClass="com.minicode.Main" -q</span><br>
+          <span class="output">MiniCode v0.2 (type "exit" to quit)</span><br><br>
+          <span class="prompt">you&gt; </span><span class="command">读一下 pom.xml 的内容，告诉我项目名称</span><br>
+          <span class="highlight">  [tool] read_file({"path":"pom.xml"})</span><br><br>
+          <span class="output">根据 pom.xml 的内容，项目的 artifactId 是 "minicode"，</span><br>
+          <span class="output">groupId 是 "com.minicode"，版本是 0.1.0。</span>
+        </div>
+      </div>
+
+      <p>Claude 自己决定了需要调用 <code>read_file</code>，我们的代码执行了文件读取并把内容返回给它，它再基于文件内容给出了回答。这就是 Agent 的工作方式。</p>
+
+      <div class="info-box tip">
+        <div class="info-box-title">本章成果</div>
+        <p>你现在有了一个能读文件的 AI 助手。但 <code>executeTool</code> 里只有一个 <code>if</code>。如果我们要加写文件、执行命令、搜索代码...每加一个工具就要改那个方法。下一章我们解决这个问题。</p>
+      </div>
+
+      <nav class="chapter-nav">
+        <a href="02-streaming-repl.html">
+          <span class="nav-label">上一章</span>
+          <span class="nav-title">流式对话</span>
+        </a>
+        <a href="04-tool-registry.html">
+          <span class="nav-label">下一章</span>
+          <span class="nav-title">工具注册表</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+</body>
+</html>

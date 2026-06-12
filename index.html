@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>从0到1构建 AI 编程助手 (Java 版)</title>
+  <link rel="stylesheet" href="styles/main.css">
+  <style>
+    .landing-page { max-width: 800px; margin: 0 auto; padding: var(--space-10) var(--space-6); }
+    .landing-header { padding: var(--space-24) 0 var(--space-16); border-bottom: 1px solid var(--border); }
+    .project-badge { font-family: var(--font-code); font-size: var(--text-xs); color: var(--accent); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: var(--space-5); display: block; }
+    .landing-header h1 { font-size: clamp(2rem, 5vw, 2.8rem); line-height: 1.2; margin-bottom: var(--space-5); }
+    .landing-header .lead { font-size: var(--text-lg); color: var(--text-secondary); line-height: 1.75; max-width: 620px; }
+    .toc { padding: var(--space-12) 0; }
+    .toc-title { font-family: var(--font-display); font-size: var(--text-sm); font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: var(--space-6); }
+    .toc-list { list-style: none; padding: 0; counter-reset: chapter; }
+    .toc-item { counter-increment: chapter; }
+    .toc-item a { display: grid; grid-template-columns: 36px 1fr; gap: var(--space-4); padding: var(--space-5) 0; border-bottom: 1px solid var(--border); text-decoration: none; align-items: baseline; transition: background 0.15s; }
+    .toc-item:first-child a { border-top: 1px solid var(--border); }
+    .toc-item a:hover { background: var(--bg-surface); text-decoration: none; }
+    .toc-item a:hover .toc-item-title { color: var(--accent); }
+    .toc-num { font-family: var(--font-code); font-size: var(--text-sm); color: var(--text-muted); text-align: right; padding-right: var(--space-2); }
+    .toc-item-body { display: flex; flex-direction: column; gap: var(--space-1); }
+    .toc-item-title { font-family: var(--font-display); font-size: var(--text-base); font-weight: 600; color: var(--text-primary); transition: color 0.15s; }
+    .toc-item-desc { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.5; font-family: var(--font-ui); }
+    .toc-tags { display: flex; gap: var(--space-2); margin-top: var(--space-2); flex-wrap: wrap; }
+    .toc-tag { font-family: var(--font-code); font-size: 0.68rem; color: var(--text-muted); background: var(--bg-surface); padding: 1px 6px; border-radius: var(--radius-sm); }
+    .overview-section { padding: var(--space-12) 0; border-top: 1px solid var(--border); }
+    .overview-section h2 { border-top: none; padding-top: 0; margin-top: 0; font-size: var(--text-xl); margin-bottom: var(--space-5); }
+    .overview-section p { font-size: var(--text-sm); font-family: var(--font-ui); color: var(--text-secondary); }
+    .arch-diagram { margin: var(--space-10) 0; padding: var(--space-8); background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); text-align: center; }
+    .tech-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--space-4); margin-top: var(--space-6); }
+    .tech-item { padding: var(--space-4); text-align: center; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-card); }
+    .tech-item-name { font-family: var(--font-code); font-size: var(--text-xs); color: var(--text-body); font-weight: 500; }
+    .tech-item-role { font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
+    .start-btn { display: inline-flex; align-items: center; gap: var(--space-2); margin-top: var(--space-8); padding: var(--space-3) var(--space-6); background: var(--accent); color: white; font-family: var(--font-ui); font-weight: 600; font-size: var(--text-sm); border-radius: var(--radius-md); text-decoration: none; transition: background 0.15s; }
+    .start-btn:hover { background: var(--accent-hover); color: white; text-decoration: none; }
+    .landing-footer { padding: var(--space-10) 0; border-top: 1px solid var(--border); margin-top: var(--space-10); }
+    .landing-footer p { font-family: var(--font-ui); font-size: var(--text-sm); color: var(--text-muted); text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="landing-page">
+    <header class="landing-header">
+      <span class="project-badge">Tutorial Series / Java 21 + Maven</span>
+      <h1>从零到一构建 AI 编程助手</h1>
+      <p class="lead">
+        用 Java 逐步实现一个类 Claude Code 的终端 AI 编程工具。
+        每一章都产出一个比上一章更有用的可运行程序——从第一章的一个 main 方法开始。
+      </p>
+      <a href="chapters/01-hello-claude.html" class="start-btn">开始阅读第一章 &rarr;</a>
+    </header>
+
+    <section class="overview-section">
+      <h2>你将构建什么</h2>
+      <p>一个叫 MiniCode 的终端 AI 编程助手（Java 实现）。它能理解自然语言指令，读写代码文件，执行 Shell 命令，并通过 MCP 协议接入第三方工具。第一章结束时它能对话，第三章结束时它能操作你的代码库。</p>
+      <div class="arch-diagram">
+        <svg width="680" height="200" viewBox="0 0 680 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="680" height="200" fill="#faf9f7"/>
+          <rect x="20" y="75" width="100" height="50" rx="6" fill="white" stroke="#d4cfc8" stroke-width="1.5"/>
+          <text x="70" y="97" text-anchor="middle" fill="#3d3937" font-family="sans-serif" font-size="11" font-weight="600">CLI</text>
+          <text x="70" y="113" text-anchor="middle" fill="#9e9790" font-family="monospace" font-size="9">Scanner/JLine</text>
+          <rect x="175" y="55" width="130" height="90" rx="8" fill="white" stroke="#b84c2a" stroke-width="2"/>
+          <text x="240" y="90" text-anchor="middle" fill="#b84c2a" font-family="sans-serif" font-size="12" font-weight="700">Agent Loop</text>
+          <text x="240" y="108" text-anchor="middle" fill="#6b6560" font-family="monospace" font-size="9">Core Engine</text>
+          <text x="240" y="125" text-anchor="middle" fill="#9e9790" font-family="monospace" font-size="8">think → act → observe</text>
+          <rect x="360" y="20" width="110" height="50" rx="6" fill="white" stroke="#d4cfc8" stroke-width="1.5"/>
+          <text x="415" y="42" text-anchor="middle" fill="#3d3937" font-family="sans-serif" font-size="11" font-weight="600">Tools</text>
+          <text x="415" y="58" text-anchor="middle" fill="#9e9790" font-family="monospace" font-size="9">Read/Write/Exec</text>
+          <rect x="360" y="130" width="110" height="50" rx="6" fill="white" stroke="#d4cfc8" stroke-width="1.5"/>
+          <text x="415" y="152" text-anchor="middle" fill="#3d3937" font-family="sans-serif" font-size="11" font-weight="600">LLM Provider</text>
+          <text x="415" y="168" text-anchor="middle" fill="#9e9790" font-family="monospace" font-size="9">Claude API</text>
+          <rect x="530" y="55" width="110" height="42" rx="6" fill="white" stroke="#d4cfc8" stroke-width="1.5"/>
+          <text x="585" y="74" text-anchor="middle" fill="#3d3937" font-family="sans-serif" font-size="11" font-weight="600">Context</text>
+          <text x="585" y="89" text-anchor="middle" fill="#9e9790" font-family="monospace" font-size="9">Token Window</text>
+          <rect x="530" y="110" width="110" height="42" rx="6" fill="white" stroke="#d4cfc8" stroke-width="1.5"/>
+          <text x="585" y="129" text-anchor="middle" fill="#3d3937" font-family="sans-serif" font-size="11" font-weight="600">MCP Plugins</text>
+          <text x="585" y="144" text-anchor="middle" fill="#9e9790" font-family="monospace" font-size="9">Extensions</text>
+          <path d="M120 100 L170 100" stroke="#b84c2a" stroke-width="1.5" marker-end="url(#arr)"/>
+          <path d="M305 80 L355 50" stroke="#6b6560" stroke-width="1" stroke-dasharray="4 3"/>
+          <path d="M305 120 L355 150" stroke="#6b6560" stroke-width="1" stroke-dasharray="4 3"/>
+          <path d="M470 45 L525 70" stroke="#6b6560" stroke-width="1" stroke-dasharray="4 3"/>
+          <path d="M470 155 L525 135" stroke="#6b6560" stroke-width="1" stroke-dasharray="4 3"/>
+          <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#b84c2a"/></marker></defs>
+        </svg>
+      </div>
+    </section>
+
+    <section class="toc">
+      <h3 class="toc-title">目录</h3>
+      <ol class="toc-list">
+        <li class="toc-item"><a href="chapters/01-hello-claude.html"><span class="toc-num">01</span><div class="toc-item-body"><span class="toc-item-title">Hello, Claude</span><span class="toc-item-desc">一个 main 方法调通 API —— 程序会说话了</span><div class="toc-tags"><span class="toc-tag">Maven</span><span class="toc-tag">Anthropic SDK</span><span class="toc-tag">第一次对话</span></div></div></a></li>
+        <li class="toc-item"><a href="chapters/02-streaming-repl.html"><span class="toc-num">02</span><div class="toc-item-body"><span class="toc-item-title">流式对话</span><span class="toc-item-desc">加入 REPL 循环和流式输出 —— 打字机效果，多轮记忆</span><div class="toc-tags"><span class="toc-tag">Scanner</span><span class="toc-tag">SSE streaming</span><span class="toc-tag">message history</span></div></div></a></li>
+        <li class="toc-item"><a href="chapters/03-first-tool.html"><span class="toc-num">03</span><div class="toc-item-body"><span class="toc-item-title">第一个工具</span><span class="toc-item-desc">教它读文件 —— 完整的 tool_use 循环，Agent 会「动手」了</span><div class="toc-tags"><span class="toc-tag">tool_use</span><span class="toc-tag">tool_result</span><span class="toc-tag">agentic loop</span></div></div></a></li>
+        <li class="toc-item"><a href="chapters/04-tool-registry.html"><span class="toc-num">04</span><div class="toc-item-body"><span class="toc-item-title">工具注册表</span><span class="toc-item-desc">消除重复，提取模式 —— 加入写文件、执行命令、搜索</span><div class="toc-tags"><span class="toc-tag">Interface</span><span class="toc-tag">Registry pattern</span><span class="toc-tag">ProcessBuilder</span></div></div></a></li>
+        <li class="toc-item"><a href="chapters/05-security.html"><span class="toc-num">05</span><div class="toc-item-body"><span class="toc-item-title">安全防护</span><span class="toc-item-desc">工具能删文件了，得加把锁 —— 权限规则、用户确认</span><div class="toc-tags"><span class="toc-tag">Permission</span><span class="toc-tag">Confirmation</span><span class="toc-tag">Regex</span></div></div></a></li>
+        <li class="toc-item"><a href="chapters/06-mcp.html"><span class="toc-num">06</span><div class="toc-item-body"><span class="toc-item-title">MCP 插件</span><span class="toc-item-desc">让别人也能给它加工具 —— Model Context Protocol 实战</span><div class="toc-tags"><span class="toc-tag">JSON-RPC 2.0</span><span class="toc-tag">ProcessBuilder</span><span class="toc-tag">MCP SDK</span></div></div></a></li>
+        <li class="toc-item"><a href="chapters/07-context.html"><span class="toc-num">07</span><div class="toc-item-body"><span class="toc-item-title">Context 管理</span><span class="toc-item-desc">对话太长放不下了 —— 用 API 返回的 token 数做真实管理</span><div class="toc-tags"><span class="toc-tag">usage tracking</span><span class="toc-tag">compaction</span><span class="toc-tag">List manipulation</span></div></div></a></li>
+        <li class="toc-item"><a href="chapters/08-ship-it.html"><span class="toc-num">08</span><div class="toc-item-body"><span class="toc-item-title">打包发布</span><span class="toc-item-desc">变成一个真正的 CLI 工具 —— 测试、构建、GraalVM native-image</span><div class="toc-tags"><span class="toc-tag">JUnit 5</span><span class="toc-tag">Maven shade</span><span class="toc-tag">native-image</span></div></div></a></li>
+      </ol>
+    </section>
+
+    <section class="overview-section">
+      <h2>技术栈</h2>
+      <div class="tech-grid">
+        <div class="tech-item"><div class="tech-item-name">Java 21</div><div class="tech-item-role">主语言</div></div>
+        <div class="tech-item"><div class="tech-item-name">Maven</div><div class="tech-item-role">构建工具</div></div>
+        <div class="tech-item"><div class="tech-item-name">Anthropic SDK</div><div class="tech-item-role">LLM 接入</div></div>
+        <div class="tech-item"><div class="tech-item-name">Jackson</div><div class="tech-item-role">JSON 处理</div></div>
+        <div class="tech-item"><div class="tech-item-name">MCP SDK</div><div class="tech-item-role">插件协议</div></div>
+      </div>
+    </section>
+
+    <footer class="landing-footer">
+      <p>从理解到实践 - 用 Java 掌握 AI 编程工具的核心原理</p>
+    </footer>
+  </div>
+</body>
+</html>

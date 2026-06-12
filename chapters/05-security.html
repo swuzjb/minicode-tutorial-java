@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>05 - 安全防护 | MiniCode (Java) 教程</title>
+  <link rel="stylesheet" href="../styles/main.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    <nav class="sidebar">
+      <a href="../index.html" class="sidebar-logo">
+        <span class="logo-mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/></svg></span>
+        MiniCode (Java)
+      </a>
+      <ul class="sidebar-nav">
+        <li><a href="01-hello-claude.html"><span class="chapter-num">01</span> Hello, Claude</a></li>
+        <li><a href="02-streaming-repl.html"><span class="chapter-num">02</span> 流式对话</a></li>
+        <li><a href="03-first-tool.html"><span class="chapter-num">03</span> 第一个工具</a></li>
+        <li><a href="04-tool-registry.html"><span class="chapter-num">04</span> 工具注册表</a></li>
+        <li><a href="05-security.html" class="active"><span class="chapter-num">05</span> 安全防护</a></li>
+        <li><a href="06-mcp.html"><span class="chapter-num">06</span> MCP 插件</a></li>
+        <li><a href="07-context.html"><span class="chapter-num">07</span> Context 管理</a></li>
+        <li><a href="08-ship-it.html"><span class="chapter-num">08</span> 打包发布</a></li>
+      </ul>
+    </nav>
+
+    <main class="main-content">
+      <header class="chapter-header">
+        <span class="chapter-number">Chapter 05</span>
+        <h1 class="chapter-title">安全防护</h1>
+        <p class="chapter-subtitle">bash 工具可以执行 <code>rm -rf /</code>。Claude 幻觉一次你就完了。</p>
+      </header>
+
+      <p>试试问 MiniCode "删除当前目录所有 .java 文件"。它会毫不犹豫地调用 bash 工具执行 <code>rm *.java</code>。你甚至来不及眨眼，源代码就没了。</p>
+
+      <p>这不行。</p>
+
+      <p>AI 模型会犯错。它可能误解你的意图，可能产生幻觉，可能在推理过程中走偏。当它手里握着一个不受约束的 bash 工具时，一次犯错的代价是不可逆的文件丢失。我们需要在工具执行层加入防护。</p>
+
+      <h2>最简方案——确认机制</h2>
+
+      <p>最直接的思路：每次执行写操作或命令前，问用户一声。</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static</span> <span class="token-type">boolean</span> <span class="token-function">confirm</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">message</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-string">"\n&#9888;&#65039;  "</span> <span class="token-operator">+</span> <span class="token-variable">message</span> <span class="token-operator">+</span> <span class="token-string">" [y/N] "</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">var</span> <span class="token-variable">answer</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">Scanner</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">in</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">nextLine</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">trim</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">toLowerCase</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">return</span> <span class="token-variable">answer</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"y"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>够简洁。Java 里一个 <code>Scanner</code> 就搞定。无需回调、无需 CompletableFuture——阻塞式 IO 在 CLI 里反而是优势。</p>
+
+      <h2>修改执行流程</h2>
+
+      <p>把确认逻辑嵌入 Registry 的 <code>execute</code> 方法。读操作直接放行，写操作和命令执行需要用户点头：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">public</span> <span class="token-type">String</span> <span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-type">JsonNode</span> <span class="token-variable">input</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">var</span> <span class="token-variable">tool</span> <span class="token-operator">=</span> <span class="token-variable">tools</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">tool</span> <span class="token-operator">==</span> <span class="token-keyword">null</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-string">"Error: unknown tool \""</span> <span class="token-operator">+</span> <span class="token-variable">name</span> <span class="token-operator">+</span> <span class="token-string">"\""</span><span class="token-punctuation">;</span>
+
+    <span class="token-comment">// 读操作直接执行</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"read_file"</span><span class="token-punctuation">)</span> <span class="token-operator">||</span> <span class="token-variable">name</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"grep"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">return</span> <span class="token-variable">tool</span><span class="token-punctuation">.</span><span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-comment">// 写操作/命令需要确认</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-operator">!</span><span class="token-function">confirm</span><span class="token-punctuation">(</span><span class="token-string">"Allow "</span> <span class="token-operator">+</span> <span class="token-variable">name</span> <span class="token-operator">+</span> <span class="token-string">"("</span> <span class="token-operator">+</span> <span class="token-variable">input</span> <span class="token-operator">+</span> <span class="token-string">") ?"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">return</span> <span class="token-string">"User denied this operation."</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-keyword">return</span> <span class="token-variable">tool</span><span class="token-punctuation">.</span><span class="token-function">execute</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">you: </span><span class="command">帮我删掉 target 目录</span><br><br>
+          <span class="output">Claude wants to run: bash({"command":"rm -rf target"})</span><br>
+          <span class="highlight">&#9888;&#65039;  Allow bash({"command":"rm -rf target"}) ? [y/N] </span><span class="command">n</span><br>
+          <span class="output">User denied this operation.</span><br><br>
+          <span class="output">好的，操作已取消。如果你确定要删除 target 目录，请再次确认。</span>
+        </div>
+      </div>
+
+      <p>好，现在至少不会悄无声息地执行危险命令了。但用了一天你就会发现新问题。</p>
+
+      <h2>这够了吗？</h2>
+
+      <p>每次都确认太烦了。<code>mvn test</code> 需要确认吗？<code>git status</code> 需要确认吗？<code>ls</code> 呢？如果每个命令都弹确认框，你会疯掉，然后肌肉记忆地按 <code>y</code>——这时候确认机制就形同虚设了。</p>
+
+      <p>我们需要规则：哪些<strong>自动允许</strong>，哪些<strong>需要确认</strong>，哪些<strong>直接拒绝</strong>。</p>
+
+      <h2>权限规则引擎</h2>
+
+      <p>定义三种权限级别，然后用规则列表匹配。Java 21 的 record 和 sealed 类型非常适合建模这种结构：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">enum</span> <span class="token-type">Permission</span> <span class="token-punctuation">{</span> <span class="token-const">ALLOW</span><span class="token-punctuation">,</span> <span class="token-const">ASK</span><span class="token-punctuation">,</span> <span class="token-const">DENY</span> <span class="token-punctuation">}</span>
+
+<span class="token-keyword">record</span> <span class="token-type">PermissionRule</span><span class="token-punctuation">(</span>
+    <span class="token-type">String</span> <span class="token-variable">tool</span><span class="token-punctuation">,</span>
+    <span class="token-type">Permission</span> <span class="token-variable">permission</span><span class="token-punctuation">,</span>
+    <span class="token-type">Predicate</span><span class="token-operator">&lt;</span><span class="token-type">JsonNode</span><span class="token-operator">&gt;</span> <span class="token-variable">condition</span>
+<span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-comment">// 无条件规则的便捷构造</span>
+    <span class="token-type">PermissionRule</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">tool</span><span class="token-punctuation">,</span> <span class="token-type">Permission</span> <span class="token-variable">permission</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">this</span><span class="token-punctuation">(</span><span class="token-variable">tool</span><span class="token-punctuation">,</span> <span class="token-variable">permission</span><span class="token-punctuation">,</span> <span class="token-keyword">null</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>然后定义规则列表——顺序很重要，第一个匹配的规则生效：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static final</span> <span class="token-type">List</span><span class="token-operator">&lt;</span><span class="token-type">PermissionRule</span><span class="token-operator">&gt;</span> <span class="token-const">RULES</span> <span class="token-operator">=</span> <span class="token-type">List</span><span class="token-punctuation">.</span><span class="token-function">of</span><span class="token-punctuation">(</span>
+    <span class="token-comment">// 读操作：自动允许</span>
+    <span class="token-keyword">new</span> <span class="token-type">PermissionRule</span><span class="token-punctuation">(</span><span class="token-string">"read_file"</span><span class="token-punctuation">,</span> <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">ALLOW</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span>
+    <span class="token-keyword">new</span> <span class="token-type">PermissionRule</span><span class="token-punctuation">(</span><span class="token-string">"grep"</span><span class="token-punctuation">,</span> <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">ALLOW</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span>
+
+    <span class="token-comment">// 危险命令：直接拒绝（注意：deny 规则要在 allow 前面）</span>
+    <span class="token-keyword">new</span> <span class="token-type">PermissionRule</span><span class="token-punctuation">(</span><span class="token-string">"bash"</span><span class="token-punctuation">,</span> <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">DENY</span><span class="token-punctuation">,</span> <span class="token-variable">input</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">cmd</span> <span class="token-operator">=</span> <span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"command"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">return</span> <span class="token-variable">cmd</span><span class="token-punctuation">.</span><span class="token-function">matches</span><span class="token-punctuation">(</span><span class="token-string">".*rm\\s+-rf.*|.*sudo.*|.*mkfs.*"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span>
+
+    <span class="token-comment">// 安全的命令：自动允许</span>
+    <span class="token-keyword">new</span> <span class="token-type">PermissionRule</span><span class="token-punctuation">(</span><span class="token-string">"bash"</span><span class="token-punctuation">,</span> <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">ALLOW</span><span class="token-punctuation">,</span> <span class="token-variable">input</span> <span class="token-operator">-&gt;</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">cmd</span> <span class="token-operator">=</span> <span class="token-variable">input</span><span class="token-punctuation">.</span><span class="token-function">get</span><span class="token-punctuation">(</span><span class="token-string">"command"</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">asText</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">return</span> <span class="token-variable">cmd</span><span class="token-punctuation">.</span><span class="token-function">matches</span><span class="token-punctuation">(</span><span class="token-string">"ls.*|cat.*|pwd|git status|git diff|mvn test.*"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span>
+
+    <span class="token-comment">// 其他：询问用户</span>
+    <span class="token-keyword">new</span> <span class="token-type">PermissionRule</span><span class="token-punctuation">(</span><span class="token-string">"*"</span><span class="token-punctuation">,</span> <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">ASK</span><span class="token-punctuation">)</span>
+<span class="token-punctuation">)</span><span class="token-punctuation">;</span></code></pre>
+
+      <h2>权限检查函数</h2>
+
+      <p>遍历规则列表，找到第一个匹配的规则：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static</span> <span class="token-type">Permission</span> <span class="token-function">checkPermission</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">toolName</span><span class="token-punctuation">,</span> <span class="token-type">JsonNode</span> <span class="token-variable">input</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">rule</span> <span class="token-punctuation">:</span> <span class="token-const">RULES</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-comment">// 工具名不匹配，跳过</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-operator">!</span><span class="token-variable">rule</span><span class="token-punctuation">.</span><span class="token-function">tool</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"*"</span><span class="token-punctuation">)</span> <span class="token-operator">&amp;&amp;</span> <span class="token-operator">!</span><span class="token-variable">rule</span><span class="token-punctuation">.</span><span class="token-function">tool</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-variable">toolName</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">continue</span><span class="token-punctuation">;</span>
+        <span class="token-comment">// 有条件但条件不满足，跳过</span>
+        <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">rule</span><span class="token-punctuation">.</span><span class="token-function">condition</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span> <span class="token-operator">!=</span> <span class="token-keyword">null</span> <span class="token-operator">&amp;&amp;</span> <span class="token-operator">!</span><span class="token-variable">rule</span><span class="token-punctuation">.</span><span class="token-function">condition</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">test</span><span class="token-punctuation">(</span><span class="token-variable">input</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">continue</span><span class="token-punctuation">;</span>
+        <span class="token-comment">// 匹配！返回权限</span>
+        <span class="token-keyword">return</span> <span class="token-variable">rule</span><span class="token-punctuation">.</span><span class="token-function">permission</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+    <span class="token-keyword">return</span> <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">ASK</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>逻辑清晰：逐条匹配，第一个命中就返回。通配符 <code>*</code> 兜底。Java 的 record 让这段代码比传统 POJO 简洁了一倍不止。</p>
+
+      <h2>"Always allow" 记忆</h2>
+
+      <p>频繁确认还是烦。比如你让 MiniCode 帮你重构，它需要写十几个文件。每次都按 <code>y</code> 太累了。我们加一个 <code>a</code>（always）选项——一旦用户选择 always，同类操作就不再询问：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">private static final</span> <span class="token-type">Set</span><span class="token-operator">&lt;</span><span class="token-type">String</span><span class="token-operator">&gt;</span> <span class="token-variable">alwaysAllowed</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">HashSet</span><span class="token-operator">&lt;&gt;</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">private static</span> <span class="token-type">boolean</span> <span class="token-function">authorize</span><span class="token-punctuation">(</span><span class="token-type">String</span> <span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-type">JsonNode</span> <span class="token-variable">input</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+    <span class="token-comment">// 已标记为 "always allow" 的工具直接放行</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">alwaysAllowed</span><span class="token-punctuation">.</span><span class="token-function">contains</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-keyword">true</span><span class="token-punctuation">;</span>
+
+    <span class="token-keyword">var</span> <span class="token-variable">permission</span> <span class="token-operator">=</span> <span class="token-function">checkPermission</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">,</span> <span class="token-variable">input</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">permission</span> <span class="token-operator">==</span> <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">ALLOW</span><span class="token-punctuation">)</span> <span class="token-keyword">return</span> <span class="token-keyword">true</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">permission</span> <span class="token-operator">==</span> <span class="token-type">Permission</span><span class="token-punctuation">.</span><span class="token-const">DENY</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-string">"\n&#128683; Denied: "</span> <span class="token-operator">+</span> <span class="token-variable">name</span> <span class="token-operator">+</span> <span class="token-string">" — matches a blocked pattern"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">return</span> <span class="token-keyword">false</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+
+    <span class="token-comment">// ASK：询问用户</span>
+    <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">print</span><span class="token-punctuation">(</span><span class="token-string">"\n&#9888;&#65039;  Allow "</span> <span class="token-operator">+</span> <span class="token-variable">name</span> <span class="token-operator">+</span> <span class="token-string">"? [y/n/a(always)] "</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">var</span> <span class="token-variable">answer</span> <span class="token-operator">=</span> <span class="token-keyword">new</span> <span class="token-type">Scanner</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">in</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">nextLine</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">trim</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">toLowerCase</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+    <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">answer</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"a"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-variable">alwaysAllowed</span><span class="token-punctuation">.</span><span class="token-function">add</span><span class="token-punctuation">(</span><span class="token-variable">name</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+        <span class="token-keyword">return</span> <span class="token-keyword">true</span><span class="token-punctuation">;</span>
+    <span class="token-punctuation">}</span>
+    <span class="token-keyword">return</span> <span class="token-variable">answer</span><span class="token-punctuation">.</span><span class="token-function">equals</span><span class="token-punctuation">(</span><span class="token-string">"y"</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h2>三种情况的终端演示</h2>
+
+      <p>现在让我们看看三种权限级别在终端里的实际表现：</p>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">you: </span><span class="command">帮我看看 pom.xml 的内容</span><br><br>
+          <span class="output">  [read_file] &#10003; auto-allowed</span><br>
+          <span class="output">  // pom.xml 内容...</span><br><br>
+          <span class="prompt">you: </span><span class="command">运行 mvn test</span><br><br>
+          <span class="output">  [bash: mvn test] &#10003; auto-allowed (safe command)</span><br>
+          <span class="output">  [INFO] BUILD SUCCESS</span><br><br>
+          <span class="prompt">you: </span><span class="command">帮我清空根目录 rm -rf /</span><br><br>
+          <span class="output">  [bash: rm -rf /]</span><br>
+          <span class="output">  &#128683; Denied: bash — matches a blocked pattern</span><br><br>
+          <span class="output">  抱歉，这个命令包含危险模式 (rm -rf)，已被安全规则拦截。</span><br><br>
+          <span class="prompt">you: </span><span class="command">创建 Utils.java 文件</span><br><br>
+          <span class="output">  [write_file]</span><br>
+          <span class="highlight">  &#9888;&#65039;  Allow write_file? [y/n/a(always)] </span><span class="command">a</span><br>
+          <span class="output">  &#10003; Always allowed for this session.</span><br>
+          <span class="output">  File created: src/main/java/com/minicode/Utils.java</span>
+        </div>
+      </div>
+
+      <h2>安全边界的诚实评估</h2>
+
+      <div class="info-box warning">
+        <div class="info-box-title">局限性</div>
+        <p>正则匹配不能防住所有攻击。命令混淆（<code>r\m -rf /</code>）、变量替换（<code>$CMD</code>）、管道组合（<code>find / -delete</code>）都能绕过简单的模式匹配。生产环境应考虑容器隔离（Docker）或沙箱（如 gVisor）。Java 生态还可以考虑用 SecurityManager 的替代方案或 ProcessBuilder 的受限执行。</p>
+        <p>但对一个学习项目来说，这已经是合理的防护层了。它能拦截绝大多数"Claude 脑子一热"的情况。</p>
+      </div>
+
+      <div class="info-box tip">
+        <div class="info-box-title">本章成果</div>
+        <p>MiniCode 现在不会自己删你的文件了。读操作秒过，安全命令自动放行，危险命令被拦截。对于介于中间的操作，用户可以逐次确认或选择 "always allow"。下一章我们让别人也能给它加工具——通过 MCP 协议。</p>
+      </div>
+
+      <nav class="chapter-nav">
+        <a href="04-tool-registry.html">
+          <span class="nav-label">上一章</span>
+          <span class="nav-title">工具注册表</span>
+        </a>
+        <a href="06-mcp.html" style="margin-left: auto;">
+          <span class="nav-label">下一章</span>
+          <span class="nav-title">MCP 插件</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+</body>
+</html>

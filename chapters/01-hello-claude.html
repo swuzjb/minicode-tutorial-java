@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>01 - Hello, Claude | MiniCode (Java) 教程</title>
+  <link rel="stylesheet" href="../styles/main.css">
+</head>
+<body>
+  <div class="page-wrapper">
+    <nav class="sidebar">
+      <a href="../index.html" class="sidebar-logo">
+        <span class="logo-mark"><svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" fill="white"/></svg></span>
+        MiniCode (Java)
+      </a>
+      <ul class="sidebar-nav">
+        <li><a href="01-hello-claude.html" class="active"><span class="chapter-num">01</span> Hello, Claude</a></li>
+        <li><a href="02-streaming-repl.html"><span class="chapter-num">02</span> 流式对话</a></li>
+        <li><a href="03-first-tool.html"><span class="chapter-num">03</span> 第一个工具</a></li>
+        <li><a href="04-tool-registry.html"><span class="chapter-num">04</span> 工具注册表</a></li>
+        <li><a href="05-security.html"><span class="chapter-num">05</span> 安全防护</a></li>
+        <li><a href="06-mcp.html"><span class="chapter-num">06</span> MCP 插件</a></li>
+        <li><a href="07-context.html"><span class="chapter-num">07</span> Context 管理</a></li>
+        <li><a href="08-ship-it.html"><span class="chapter-num">08</span> 打包发布</a></li>
+      </ul>
+    </nav>
+
+    <main class="main-content">
+      <header class="chapter-header">
+        <span class="chapter-number">Chapter 01</span>
+        <h1 class="chapter-title">Hello, Claude</h1>
+        <p class="chapter-subtitle">一个 main 方法，调通 API，拿到回复</p>
+      </header>
+
+      <p>我们从最简单的事情开始：写一个 <code>main</code> 方法，调用 Claude API，拿到回复，打印出来。整个过程不到 20 行 Java 代码。</p>
+
+      <h2>创建 Maven 项目</h2>
+
+      <p>打开终端，用 Maven archetype 生成项目骨架：</p>
+
+      <pre data-lang="bash"><code><span class="token-function">mvn</span> archetype:generate \
+  -DgroupId=com.minicode \
+  -DartifactId=minicode \
+  -DarchetypeArtifactId=maven-archetype-quickstart \
+  -DinteractiveMode=false</code></pre>
+
+      <p>进入项目目录后，编辑 <code>pom.xml</code>，设置 Java 21 并添加 Anthropic SDK 依赖：</p>
+
+      <pre data-lang="xml"><code><span class="token-operator">&lt;?</span><span class="token-keyword">xml</span> <span class="token-variable">version</span>=<span class="token-string">"1.0"</span> <span class="token-variable">encoding</span>=<span class="token-string">"UTF-8"</span><span class="token-operator">?&gt;</span>
+<span class="token-operator">&lt;</span><span class="token-keyword">project</span> <span class="token-variable">xmlns</span>=<span class="token-string">"http://maven.apache.org/POM/4.0.0"</span>
+         <span class="token-variable">xmlns:xsi</span>=<span class="token-string">"http://www.w3.org/2001/XMLSchema-instance"</span>
+         <span class="token-variable">xsi:schemaLocation</span>=<span class="token-string">"http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd"</span><span class="token-operator">&gt;</span>
+  <span class="token-operator">&lt;</span><span class="token-keyword">modelVersion</span><span class="token-operator">&gt;</span>4.0.0<span class="token-operator">&lt;/</span><span class="token-keyword">modelVersion</span><span class="token-operator">&gt;</span>
+
+  <span class="token-operator">&lt;</span><span class="token-keyword">groupId</span><span class="token-operator">&gt;</span>com.minicode<span class="token-operator">&lt;/</span><span class="token-keyword">groupId</span><span class="token-operator">&gt;</span>
+  <span class="token-operator">&lt;</span><span class="token-keyword">artifactId</span><span class="token-operator">&gt;</span>minicode<span class="token-operator">&lt;/</span><span class="token-keyword">artifactId</span><span class="token-operator">&gt;</span>
+  <span class="token-operator">&lt;</span><span class="token-keyword">version</span><span class="token-operator">&gt;</span>0.1.0<span class="token-operator">&lt;/</span><span class="token-keyword">version</span><span class="token-operator">&gt;</span>
+
+  <span class="token-operator">&lt;</span><span class="token-keyword">properties</span><span class="token-operator">&gt;</span>
+    <span class="token-operator">&lt;</span><span class="token-keyword">maven.compiler.source</span><span class="token-operator">&gt;</span>21<span class="token-operator">&lt;/</span><span class="token-keyword">maven.compiler.source</span><span class="token-operator">&gt;</span>
+    <span class="token-operator">&lt;</span><span class="token-keyword">maven.compiler.target</span><span class="token-operator">&gt;</span>21<span class="token-operator">&lt;/</span><span class="token-keyword">maven.compiler.target</span><span class="token-operator">&gt;</span>
+    <span class="token-operator">&lt;</span><span class="token-keyword">project.build.sourceEncoding</span><span class="token-operator">&gt;</span>UTF-8<span class="token-operator">&lt;/</span><span class="token-keyword">project.build.sourceEncoding</span><span class="token-operator">&gt;</span>
+  <span class="token-operator">&lt;/</span><span class="token-keyword">properties</span><span class="token-operator">&gt;</span>
+
+  <span class="token-operator">&lt;</span><span class="token-keyword">dependencies</span><span class="token-operator">&gt;</span>
+    <span class="token-operator">&lt;</span><span class="token-keyword">dependency</span><span class="token-operator">&gt;</span>
+      <span class="token-operator">&lt;</span><span class="token-keyword">groupId</span><span class="token-operator">&gt;</span>com.anthropic<span class="token-operator">&lt;/</span><span class="token-keyword">groupId</span><span class="token-operator">&gt;</span>
+      <span class="token-operator">&lt;</span><span class="token-keyword">artifactId</span><span class="token-operator">&gt;</span>anthropic-java<span class="token-operator">&lt;/</span><span class="token-keyword">artifactId</span><span class="token-operator">&gt;</span>
+      <span class="token-operator">&lt;</span><span class="token-keyword">version</span><span class="token-operator">&gt;</span>1.1.0<span class="token-operator">&lt;/</span><span class="token-keyword">version</span><span class="token-operator">&gt;</span>
+    <span class="token-operator">&lt;/</span><span class="token-keyword">dependency</span><span class="token-operator">&gt;</span>
+  <span class="token-operator">&lt;/</span><span class="token-keyword">dependencies</span><span class="token-operator">&gt;</span>
+<span class="token-operator">&lt;/</span><span class="token-keyword">project</span><span class="token-operator">&gt;</span></code></pre>
+
+      <p>项目结构此时长这样：</p>
+
+      <div class="file-tree">
+<span class="folder">minicode/</span>
+├── <span class="file">pom.xml</span>
+└── <span class="folder">src/main/java/com/minicode/</span>
+    └── <span class="highlight-file">Main.java</span>
+      </div>
+
+      <h2>设置 API Key</h2>
+
+      <div class="info-box warning">
+        <div class="info-box-title">注意</div>
+        <p>永远不要把 API Key 提交到版本控制。后续章节会用配置文件管理，现在先用环境变量。</p>
+      </div>
+
+      <pre data-lang="bash"><code><span class="token-keyword">export</span> ANTHROPIC_API_KEY=<span class="token-string">"your-key-here"</span></code></pre>
+
+      <p>Anthropic Java SDK 会自动从 <code>ANTHROPIC_API_KEY</code> 环境变量读取密钥。你也可以在代码里显式设置，但用环境变量更安全。</p>
+
+      <h2>写代码</h2>
+
+      <p>创建 <code>src/main/java/com/minicode/Main.java</code>——不到 20 行有效代码：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">package</span> <span class="token-variable">com.minicode</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.client.AnthropicClient</span><span class="token-punctuation">;</span>
+<span class="token-keyword">import</span> <span class="token-variable">com.anthropic.models.messages.*</span><span class="token-punctuation">;</span>
+
+<span class="token-keyword">public</span> <span class="token-keyword">class</span> <span class="token-type">Main</span> <span class="token-punctuation">{</span>
+    <span class="token-keyword">public</span> <span class="token-keyword">static</span> <span class="token-keyword">void</span> <span class="token-function">main</span><span class="token-punctuation">(</span><span class="token-type">String</span><span class="token-punctuation">[</span><span class="token-punctuation">]</span> <span class="token-variable">args</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+        <span class="token-keyword">var</span> <span class="token-variable">client</span> <span class="token-operator">=</span> <span class="token-type">AnthropicClient</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">apiKey</span><span class="token-punctuation">(</span><span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-function">getenv</span><span class="token-punctuation">(</span><span class="token-string">"ANTHROPIC_API_KEY"</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span>
+            <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">var</span> <span class="token-variable">message</span> <span class="token-operator">=</span> <span class="token-variable">client</span><span class="token-punctuation">.</span><span class="token-function">messages</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">.</span><span class="token-function">create</span><span class="token-punctuation">(</span>
+            <span class="token-type">MessageCreateParams</span><span class="token-punctuation">.</span><span class="token-function">builder</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">model</span><span class="token-punctuation">(</span><span class="token-string">"claude-sonnet-4-20250514"</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">maxTokens</span><span class="token-punctuation">(</span><span class="token-number">1024</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">addUserMessage</span><span class="token-punctuation">(</span><span class="token-string">"用一句话解释什么是 Java"</span><span class="token-punctuation">)</span>
+                <span class="token-punctuation">.</span><span class="token-function">build</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span>
+        <span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+
+        <span class="token-keyword">for</span> <span class="token-punctuation">(</span><span class="token-keyword">var</span> <span class="token-variable">block</span> <span class="token-punctuation">:</span> <span class="token-variable">message</span><span class="token-punctuation">.</span><span class="token-function">content</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+            <span class="token-keyword">if</span> <span class="token-punctuation">(</span><span class="token-variable">block</span> <span class="token-keyword">instanceof</span> <span class="token-type">ContentBlock.Text</span> <span class="token-variable">text</span><span class="token-punctuation">)</span> <span class="token-punctuation">{</span>
+                <span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">println</span><span class="token-punctuation">(</span><span class="token-variable">text</span><span class="token-punctuation">.</span><span class="token-function">text</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+            <span class="token-punctuation">}</span>
+        <span class="token-punctuation">}</span>
+    <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <h2>运行它</h2>
+
+      <div class="terminal">
+        <div class="terminal-header">
+          <span class="terminal-dot red"></span>
+          <span class="terminal-dot yellow"></span>
+          <span class="terminal-dot green"></span>
+          <span class="terminal-title">minicode &mdash; zsh</span>
+        </div>
+        <div class="terminal-body">
+          <span class="prompt">$ </span><span class="command">mvn compile exec:java -Dexec.mainClass="com.minicode.Main" -q</span><br>
+          <span class="output">Java 是一种跨平台的面向对象编程语言，通过 JVM 实现"一次编写，到处运行"的理念。</span>
+        </div>
+      </div>
+
+      <p>就这样。一个 <code>main</code> 方法，你的 Java 程序已经在跟 Claude 对话了。</p>
+
+      <div class="info-box tip">
+        <div class="info-box-title">提示</div>
+        <p>如果你不想每次看到 Maven 的下载日志，加 <code>-q</code>（quiet 模式）。也可以在 <code>pom.xml</code> 里配置 <code>exec-maven-plugin</code> 让运行命令更短。</p>
+      </div>
+
+      <h2>理解返回值</h2>
+
+      <p>你可能注意到了——我们用 <code>for</code> 循环遍历 <code>message.content()</code>，并做了 <code>instanceof</code> 模式匹配，而不是直接取一个字符串。这是因为 Claude 的响应是一个<strong>内容块列表</strong>。它可以包含多种类型的块：</p>
+
+      <ul>
+        <li><code>ContentBlock.Text</code> — 普通文本回复</li>
+        <li><code>ContentBlock.ToolUse</code> — 工具调用请求（第三章会用到）</li>
+      </ul>
+
+      <p>Java 21 的 pattern matching for <code>instanceof</code> 让这个检查非常简洁——直接在类型判断的同时声明变量。</p>
+
+      <p>完整的响应对象在 JSON 层面长这样：</p>
+
+      <pre data-lang="json"><code><span class="token-punctuation">{</span>
+  <span class="token-string">"id"</span><span class="token-punctuation">:</span> <span class="token-string">"msg_01XFDUDYJgAACzvnptvVoYEL"</span><span class="token-punctuation">,</span>
+  <span class="token-string">"type"</span><span class="token-punctuation">:</span> <span class="token-string">"message"</span><span class="token-punctuation">,</span>
+  <span class="token-string">"role"</span><span class="token-punctuation">:</span> <span class="token-string">"assistant"</span><span class="token-punctuation">,</span>
+  <span class="token-string">"content"</span><span class="token-punctuation">:</span> <span class="token-punctuation">[</span>
+    <span class="token-punctuation">{</span> <span class="token-string">"type"</span><span class="token-punctuation">:</span> <span class="token-string">"text"</span><span class="token-punctuation">,</span> <span class="token-string">"text"</span><span class="token-punctuation">:</span> <span class="token-string">"Java 是..."</span> <span class="token-punctuation">}</span>
+  <span class="token-punctuation">]</span><span class="token-punctuation">,</span>
+  <span class="token-string">"stop_reason"</span><span class="token-punctuation">:</span> <span class="token-string">"end_turn"</span><span class="token-punctuation">,</span>
+  <span class="token-string">"usage"</span><span class="token-punctuation">:</span> <span class="token-punctuation">{</span>
+    <span class="token-string">"input_tokens"</span><span class="token-punctuation">:</span> <span class="token-number">18</span><span class="token-punctuation">,</span>
+    <span class="token-string">"output_tokens"</span><span class="token-punctuation">:</span> <span class="token-number">45</span>
+  <span class="token-punctuation">}</span>
+<span class="token-punctuation">}</span></code></pre>
+
+      <p>在 Java SDK 中，你可以通过 <code>message.usage()</code> 获取 token 用量：</p>
+
+      <pre data-lang="java"><code><span class="token-keyword">var</span> <span class="token-variable">usage</span> <span class="token-operator">=</span> <span class="token-variable">message</span><span class="token-punctuation">.</span><span class="token-function">usage</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-type">System</span><span class="token-punctuation">.</span><span class="token-variable">out</span><span class="token-punctuation">.</span><span class="token-function">printf</span><span class="token-punctuation">(</span><span class="token-string">"tokens: %d in, %d out%n"</span><span class="token-punctuation">,</span>
+    <span class="token-variable">usage</span><span class="token-punctuation">.</span><span class="token-function">inputTokens</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">,</span> <span class="token-variable">usage</span><span class="token-punctuation">.</span><span class="token-function">outputTokens</span><span class="token-punctuation">(</span><span class="token-punctuation">)</span><span class="token-punctuation">)</span><span class="token-punctuation">;</span>
+<span class="token-comment">// tokens: 18 in, 45 out</span></code></pre>
+
+      <p>后续章节我们会用它来做 token 计数显示和上下文窗口管理。</p>
+
+      <div class="info-box tip">
+        <div class="info-box-title">本章成果</div>
+        <p>你有了一个能跟 Claude 对话的 Java 程序。它还不能多轮对话——你每次都要改代码里的字符串再重新编译。下一章我们加上交互循环和流式输出。</p>
+      </div>
+
+      <nav class="chapter-nav">
+        <span></span>
+        <a href="02-streaming-repl.html" style="margin-left: auto;">
+          <span class="nav-label">下一章</span>
+          <span class="nav-title">流式对话</span>
+        </a>
+      </nav>
+    </main>
+  </div>
+</body>
+</html>
